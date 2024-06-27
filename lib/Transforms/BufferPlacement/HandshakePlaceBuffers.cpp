@@ -24,6 +24,7 @@
 #include "dynamatic/Transforms/BufferPlacement/CFDFC.h"
 #include "dynamatic/Transforms/BufferPlacement/FPGA20Buffers.h"
 #include "dynamatic/Transforms/BufferPlacement/FPL22Buffers.h"
+#include "dynamatic/Transforms/BufferPlacement/DAC23Buffers.h"
 #include "dynamatic/Transforms/HandshakeMaterialize.h"
 #include "experimental/Support/StdProfiler.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -47,7 +48,7 @@ static constexpr llvm::StringLiteral ON_MERGES("on-merges");
 #ifndef DYNAMATIC_GUROBI_NOT_INSTALLED
 /// Algorithms that do require solving an MILP.
 static constexpr llvm::StringLiteral FPGA20("fpga20"),
-    FPGA20_LEGACY("fpga20-legacy"), FPL22("fpl22");
+    FPGA20_LEGACY("fpga20-legacy"), FPL22("fpl22"), DAC23("dac23");
 #endif // DYNAMATIC_GUROBI_NOT_INSTALLED
 
 namespace {
@@ -126,6 +127,7 @@ void HandshakePlaceBuffersPass::runDynamaticPass() {
   allAlgorithms[FPGA20] = &HandshakePlaceBuffersPass::placeUsingMILP;
   allAlgorithms[FPGA20_LEGACY] = &HandshakePlaceBuffersPass::placeUsingMILP;
   allAlgorithms[FPL22] = &HandshakePlaceBuffersPass::placeUsingMILP;
+  allAlgorithms[DAC23] = &HandshakePlaceBuffersPass::placeUsingMILP;
 #endif // DYNAMATIC_GUROBI_NOT_INSTALLED
 
   // Check that the algorithm exists
@@ -461,6 +463,45 @@ LogicalResult HandshakePlaceBuffersPass::getBufferPlacement(
     // Solve last MILP on channels/units that are not part of any CFDFC
     return checkLoggerAndSolve<fpl22::OutOfCycleBuffers>(
         logger, "out_of_cycle", placement, env, info, timingDB, targetCP);
+  }
+  if (algorithm == DAC23) {
+    //llvm::outs() << "AAAAAAAAAAAAAA running dac\n";
+    // Create disjoint block unions of all CFDFCs
+    SmallVector<CFDFC *, 8> cfdfcs;
+    std::vector<CFDFCUnion> disjointUnions;
+    llvm::transform(info.cfdfcs, std::back_inserter(cfdfcs),
+                    [](auto cfAndOpt) { return cfAndOpt.first; });
+    getDisjointBlockUnions(cfdfcs, disjointUnions);
+    if (logger)
+      logCFDFCUnions(info, *logger, disjointUnions);
+
+    // The iterative approach executes multiple iterations
+    int max_iterations = 1, ith_iteration = 0;
+    while(ith_iteration < max_iterations){
+
+      // Execute ABC to get the timing information
+
+
+      // Create and solve an MILP for each CFDFC union. Placement decisions get
+      // accumulated over all MILPs. It's not possible to override a previous
+      // placement decision because each CFDFC union is disjoint from the others
+      for (auto [idx, cfUnion] : llvm::enumerate(disjointUnions)) {
+        std::string milpName = "cfdfc_placement_" + std::to_string(idx);
+        if (failed(checkLoggerAndSolve<dac23::CFDFCUnionBuffers>(
+                logger, milpName, placement, env, info, timingDB, targetCP,
+                cfUnion)))
+          return failure();
+      }
+
+      // Solve last MILP on channels/units that are not part of any CFDFC
+      if (failed( checkLoggerAndSolve<dac23::OutOfCycleBuffers>(
+          logger, "out_of_cycle", placement, env, info, timingDB, targetCP) )){
+        return failure();
+      }
+    
+      ith_iteration++;
+    }
+    return success();
   }
 
   llvm_unreachable("unknown algorithm");

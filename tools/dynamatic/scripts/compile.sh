@@ -11,7 +11,7 @@ DYNAMATIC_DIR=$1
 SRC_DIR=$2
 OUTPUT_DIR=$3
 KERNEL_NAME=$4
-USE_SIMPLE_BUFFERS=$5
+BUFFERS_TYPE=$5
 TARGET_CP=$6
 
 # Binaries used during compilation
@@ -130,7 +130,28 @@ exit_on_fail "Failed to apply transformations to handshake" \
   "Applied transformations to handshake"
 
 # Buffer placement
-if [[ $USE_SIMPLE_BUFFERS -ne 0 ]]; then
+if [[ $BUFFERS_TYPE -eq 2 ]]; then
+  # Compile kernel's main function to extract profiling information
+  "$CLANGXX_BIN" "$SRC_DIR/$KERNEL_NAME.c" -D PRINT_PROFILING_INFO -I \
+    "$DYNAMATIC_DIR/include" -Wno-deprecated -o "$F_PROFILER_BIN"
+  exit_on_fail "Failed to build kernel for profiling" "Built kernel for profiling"
+
+  "$F_PROFILER_BIN" > "$F_PROFILER_INPUTS"
+  exit_on_fail "Failed to kernel for profiling" "Ran kernel for profiling"
+
+  # cf-level profiler
+  "$DYNAMATIC_PROFILER_BIN" "$F_CF_DYN_TRANSFORMED" \
+    --top-level-function="$KERNEL_NAME" --input-args-file="$F_PROFILER_INPUTS" \
+    > $F_FREQUENCIES
+  exit_on_fail "Failed to profile cf-level" "Profiled cf-level"
+
+  # Iterative buffer placement
+  "$DYNAMATIC_OPT_BIN" "$F_HANDSHAKE_TRANSFORMED" \
+    --handshake-set-buffering-properties="version=fpga20" \
+    --handshake-place-buffers="algorithm=dac23 frequencies=$F_FREQUENCIES timing-models=$DYNAMATIC_DIR/data/components.json target-period=$TARGET_CP timeout=300 dump-logs" \
+    > "$F_HANDSHAKE_BUFFERED"
+  exit_on_fail "Failed to place simple buffers" "Placed simple buffers"
+elif [[ $BUFFERS_TYPE -eq 1 ]]; then
   # Simple buffer placement
   "$DYNAMATIC_OPT_BIN" "$F_HANDSHAKE_TRANSFORMED" \
     --handshake-set-buffering-properties="version=fpga20" \

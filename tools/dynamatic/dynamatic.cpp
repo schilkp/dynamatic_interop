@@ -225,6 +225,7 @@ public:
 class Compile : public Command {
 public:
   static constexpr llvm::StringLiteral SIMPLE_BUFFERS = "simple-buffers";
+  static constexpr llvm::StringLiteral ITERATIVE_BUFFERS = "iterative-buffers";
 
   Compile(FrontendState &state)
       : Command("compile",
@@ -232,6 +233,7 @@ public:
                 "produces both handshake-level IR and an equivalent DOT file",
                 state) {
     addFlag({SIMPLE_BUFFERS, "Use simple buffer placement"});
+    addFlag({ITERATIVE_BUFFERS, "Use iterative buffer placement"});
   }
 
   CommandResult execute(CommandArguments &args) override;
@@ -532,7 +534,14 @@ CommandResult Compile::execute(CommandArguments &args) {
     return CommandResult::FAIL;
 
   std::string script = state.getScriptsPath() + getSeparator() + "compile.sh";
-  std::string buffers = args.flags.contains(SIMPLE_BUFFERS) ? "1" : "0";
+  std::string buffers;
+  if(args.flags.contains(ITERATIVE_BUFFERS)){
+    buffers = "2";
+  } else if(args.flags.contains(SIMPLE_BUFFERS)){
+    buffers = "1";
+  } else {
+    buffers = "0";
+  }
 
   return exec(script, state.dynamaticPath, state.getKernelDir(),
               state.getOutputDir(), state.getKernelName(), buffers,

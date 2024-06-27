@@ -4,6 +4,7 @@ add_dynamatic_library(DynamaticBufferPlacement
   CFDFC.cpp
   FPGA20Buffers.cpp
   FPL22Buffers.cpp
+  DAC23Buffers.cpp
   HandshakePlaceBuffers.cpp
   HandshakeSetBufferingProperties.cpp
 

@@ -1,13 +1,13 @@
 #include "loop_multiply.h"
 #include "dynamatic/Integration.h"
 
-void loop_multiply(in_int_t alpha, inout_int_t tmp[NI][NJ]) {
-  // unsigned x = 2;
-  // for (unsigned i = 0; i < N; ++i) {
-  //   if (a[i] == 0)
-  //     x = x * x;
-  // }
-  // return x;
+int loop_multiply(in_int_t alpha, inout_int_t tmp[NI][NJ]) {
+  unsigned x = 3;
+  for (unsigned i = 0; i < N; ++i) {
+    if (tmp[i][i] == 0)
+      x = x * i;
+  }
+  return x;
 
   /*
   for (unsigned j = 0; j < NJ; j++) {
@@ -28,16 +28,25 @@ void loop_multiply(in_int_t alpha, inout_int_t tmp[NI][NJ]) {
   // tmp[j][j] = tmp[j][j] + alpha;
   //}*/
 
-  for (int j = 0; j < NJ; j++) {
-    tmp[j][j] = tmp[j][j] + alpha + j;
+  // for (int j = 0; j < NJ; j++) {
+  //   tmp[j][j] = tmp[j][j] + alpha + j;
 
-    if (alpha > 5) {
-      if (alpha > 7)
-        tmp[j][j] = tmp[j][j] + alpha;
-    } else {
-      tmp[j][j] = tmp[j][j] + alpha + j;
-    }
-  }
+  //   if (alpha > 5) {
+  //     if (alpha > 7)
+  //       tmp[j][j] = tmp[j][j] + alpha;
+  //   } else {
+  //     tmp[j][j] = tmp[j][j] + alpha + j;
+  //   }
+  // }
+
+  // for (unsigned j = 0; j < NJ; j++) {
+  //   tmp[j][j] = alpha + j; // tmp[j][j] + 
+  //   //if (tmp[j][j] > 5)
+  //     // int sum = tmp[j][j];
+  //     // if (sum > 5)
+  //     //    for (unsigned k = 0; k < NK; ++k)
+  //     tmp[j][j] = tmp[j][j] * 2;
+  // }
 }
 
 int main(void) {

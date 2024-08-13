@@ -19,6 +19,7 @@
 #include "dynamatic/Conversion/CfToHandshake.h"
 #include "dynamatic/Analysis/ConstantAnalysis.h"
 #include "dynamatic/Analysis/ControlDependenceAnalysis.h"
+#include "dynamatic/Analysis/GsaAnalysis.h"
 #include "dynamatic/Analysis/NameAnalysis.h"
 #include "dynamatic/Dialect/Handshake/HandshakeInterfaces.h"
 #include "dynamatic/Dialect/Handshake/HandshakeOps.h"
@@ -418,6 +419,36 @@ HandshakeLowering::insertMerge(BlockArgument blockArg,
       rewriter.create<handshake::MuxOp>(insertLoc, Value(indexEdge), operands);
   return MergeOpInfo{muxOp, blockArg, dataEdges, indexEdge};
 }
+
+LogicalResult HandshakeLowering::addProperSsaMerges(ConversionPatternRewriter &rewriter) {
+  // SmallVector<Value> mergeOperands;
+  // mergeOperands.push_back(startCtrl);
+  // mergeOperands.push_back(startCtrl);
+  // auto mergeOp = builder.create<handshake::MergeOp>(loc, mergeOperands);
+  
+  // Location loc = getPostDominantSuccessor(prod, cons)
+  //                          ->getOperations()
+  //                          .front()
+  //                          .getLoc();
+
+  //       // if (memDep.isBackward) {
+  //       //   builder.setInsertionPointToStart(
+  //       //       getPostDominantSuccessor(prod, cons));
+  //       // } else {
+  //         rewriter.setInsertionPointToStart(cons);
+  //         //builder.setInsertionPointToStart(cons);
+  //         loc = forksGraph[cons]->getLoc();
+  //         llvm::errs() << "Merge added in consumer\n";
+  //       }
+
+        
+  //MergeOpInfo mergeInfo = insertMerge(arg, edgeBuilder, rewriter);
+
+  
+  gsaAnalysis.printSsaPhis(funcOpIdx);
+  return success();
+}
+
 
 LogicalResult
 HandshakeLowering::addMergeOps(ConversionPatternRewriter &rewriter) {
@@ -2317,6 +2348,8 @@ dynamatic::partiallyLowerRegion(const RegionLoweringFunc &loweringFunc,
 /// Lowers the region referenced by the handshake lowering strategy
 /// following a fixed sequence of steps.
 static LogicalResult lowerRegion(HandshakeLowering &hl) {
+  if (failed(runPartialLowering(hl, &HandshakeLowering::addProperSsaMerges)))
+    return failure();
 
   if (failed(runPartialLowering(hl, &HandshakeLowering::createControlNetwork)))
     return failure();
@@ -2505,39 +2538,43 @@ struct CfToHandshakePass
     funcTarget.addIllegalOp<func::FuncOp>();
     funcTarget.addLegalOp<handshake::FuncOp>();
 
-    // Call the analysis hee and fill the structures from Func::FuncOp
+    // Call the control dependence analysis and fill the structures from Func::FuncOp
     ControlDependenceAnalysis cdgAnalysis =
         getAnalysis<ControlDependenceAnalysis>();
 
+    // Call the control dependence analysis and fill the structures from Func::FuncOp
+    GsaAnalysis gsaAnalysis =
+        getAnalysis<GsaAnalysis>();
+
     if (failed(applyPartialConversion(modOp, funcTarget, std::move(patterns))))
       return signalPassFailure();
-
-    // Loop over the structures to change the pointer addresses to those
-    // from the handshake:FuncOp  (AYA: might need to add write functions to
-    // your)
 
     // Lower every function individually
     auto funcOps = modOp.getOps<handshake::FuncOp>();
     int funcOpIdx = 0;
     for (handshake::FuncOp funcOp : llvm::make_early_inc_range(funcOps)) {
       // Loop over the Blocks of this funcOp to update the ptrs of every
-      // Block in the control dependency strucute of this funcOp_idx
+      // Block in the control dependency strucute of this funcOp_idx and in the ssa phis structure
       mlir::Region &funcReg = funcOp.getBody();
       for (mlir::Block &block : funcReg.getBlocks()) {
         cdgAnalysis.adjustBlockPtr(funcOpIdx, &block);
+        //gsaAnalysis.adjustBlockPtr(funcOpIdx, &block);
       }
-
+      
       // Lower the region inside the function if it is not external
       if (!funcOp.isExternal()) {
         mlir::DominanceInfo domInfo;
         HandshakeLowering hl(funcOp.getBody(), funcOpIdx,
                              getAnalysis<NameAnalysis>(),
-                             getAnalysis<ControlDependenceAnalysis>(), domInfo);
+                             getAnalysis<ControlDependenceAnalysis>(), 
+                             getAnalysis<GsaAnalysis>(),
+                             domInfo);
 
-        if (failed(lowerRegion(hl)))
+        if (failed(lowerRegion(hl)))  // the main function that does the lowering
           return signalPassFailure();
         funcOpIdx++;
       }
+
     }
   }
 };

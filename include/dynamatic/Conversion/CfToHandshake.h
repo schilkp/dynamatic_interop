@@ -15,6 +15,7 @@
 #define DYNAMATIC_CONVERSION_CF_TO_HANDSHAKE_H
 
 #include "dynamatic/Analysis/ControlDependenceAnalysis.h"
+#include "dynamatic/Analysis/GsaAnalysis.h"
 #include "dynamatic/Analysis/NameAnalysis.h"
 #include "dynamatic/Dialect/Handshake/HandshakeInterfaces.h"
 #include "dynamatic/Dialect/Handshake/MemoryInterfaces.h"
@@ -84,9 +85,10 @@ public:
   explicit HandshakeLowering(Region &region, int funcOpIdx,
                              NameAnalysis &nameAnalysis,
                              ControlDependenceAnalysis &cdgAnalysis,
+                             GsaAnalysis &gsaAnalysis,
                              mlir::DominanceInfo &domInfo)
       : region(region), funcOpIdx(funcOpIdx), nameAnalysis(nameAnalysis),
-        cdgAnalysis(cdgAnalysis), li(domInfo.getDomTree(&region)) {}
+        cdgAnalysis(cdgAnalysis), gsaAnalysis(gsaAnalysis), li(domInfo.getDomTree(&region)) {}
 
   /// Creates the control-only network by adding a control-only argument to the
   /// region's entry block and forwarding it through all basic blocks.
@@ -96,6 +98,8 @@ public:
   /// then removes all block arguments and corresponding branch operands. This
   /// always succeeds.
   LogicalResult addMergeOps(ConversionPatternRewriter &rewriter);
+
+  LogicalResult addProperSsaMerges(ConversionPatternRewriter &rewriter);
 
   /// Adds handshake-level branch-like operations before all cf-level
   /// branch-like terminators within the region. This needs to happen after
@@ -312,11 +316,11 @@ private:
   // Control dependence analysis to identify the conditions of production and
   // consumption of operations to implement fast token delivery
   ControlDependenceAnalysis &cdgAnalysis;
+  // Gated Single assignment analysis 
+  GsaAnalysis &gsaAnalysis;
 
   /// Stores the loop info of the control flow graph
   mlir::CFGLoopInfo li;
-
-  // ControlDependenceAnalysis &cdgAnalysis;
 
   // Function that runs loop analysis on the funcOp Region.
   LogicalResult findLoopDetails(mlir::CFGLoopInfo &li, Region &funcReg);

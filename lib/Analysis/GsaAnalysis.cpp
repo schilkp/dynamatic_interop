@@ -22,9 +22,22 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace dynamatic;
 
+// TODO: 
+// (1) figure out something for when a Phi is fed from a global argument: Use block == &region.front()
+// (2) Create the getter function!!
+// (3) In the conversion pass, check how to kill SSA maximization
+
+SmallVector<SSAPhi *, 4> GsaAnalysis::getSsaPhis(int funcOpIdx) {
+  SmallVector<SSAPhi *, 4> ssa_phis;
+
+  for(auto& ssa_phi : all_ssa_phis[funcOpIdx])
+    ssa_phis.emplace_back(ssa_phi);
+
+  return ssa_phis;
+}
+
 
 void fillSsaPhiOps(SSAPhi* phi, Block* arg_block, int arg_idx) {
-
 // Loop over the predecessor blocks of the owner_block to identify the producer operations
   for (Block *pred_block : arg_block->getPredecessors()) {
     // For each block, identify its terminator branching instruction

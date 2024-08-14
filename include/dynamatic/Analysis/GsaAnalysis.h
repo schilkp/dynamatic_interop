@@ -76,6 +76,9 @@ public:
  // this function allows for changing the addresses of the operations
  void adjustOperationPtr(int funcOp_idx, Block *new_op);
 
+ // getter function
+ SmallVector<SSAPhi *, 4> getSsaPhis(int funcOpIdx);
+
   /// Invalidation hook to keep the analysis cached across passes. Returns true
   /// if the analysis should be invalidated and fully reconstructed the next
   /// time it is queried.

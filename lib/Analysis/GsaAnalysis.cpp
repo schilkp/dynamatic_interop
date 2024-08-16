@@ -22,10 +22,6 @@ using namespace mlir;
 using namespace mlir::func;
 using namespace dynamatic;
 
-// TODO: 
-// (1) figure out something for when a Phi is fed from a global argument: Use block == &region.front()
-// (2) Create the getter function!!
-// (3) In the conversion pass, check how to kill SSA maximization
 
 SmallVector<SSAPhi *, 4> GsaAnalysis::getSsaPhis(int funcOpIdx) {
   SmallVector<SSAPhi *, 4> ssa_phis;
@@ -36,52 +32,59 @@ SmallVector<SSAPhi *, 4> GsaAnalysis::getSsaPhis(int funcOpIdx) {
   return ssa_phis;
 }
 
-
-void fillSsaPhiOps(SSAPhi* phi, Block* arg_block, int arg_idx) {
+void identifySsaPhis_helper(Region &funcReg, SSAPhi* phi, Block* arg_block, int arg_idx) {
 // Loop over the predecessor blocks of the owner_block to identify the producer operations
-  for (Block *pred_block : arg_block->getPredecessors()) {
+  for (Block* one_pred_block : arg_block->getPredecessors()) {
     // For each block, identify its terminator branching instruction
     auto branch_op =
-        dyn_cast<BranchOpInterface>(pred_block->getTerminator());
+        dyn_cast<BranchOpInterface>(one_pred_block->getTerminator());
     assert(branch_op && "Expected terminator operation in a predecessor "
                         "block feeding a block argument!");
 
-    for (auto [idx, succ_branch_block] :
-    llvm::enumerate(branch_op->getSuccessors())) {
+    for (auto [idx, succ_branch_block] : llvm::enumerate(branch_op->getSuccessors())) {
       if(succ_branch_block == arg_block) {
         Operation *producer_operation = branch_op.getSuccessorOperands(idx)[arg_idx].getDefiningOp();
 
-        // If there is no operation in this block, then it must be in the block's arguments....
+        // If there is no operation in this block, then it must be in the block's arguments
+        phi->pred_oper.emplace_back(producer_operation);
+        phi->pred_block.emplace_back(one_pred_block);
+
         if(producer_operation == nullptr) {
-          // llvm::errs() << "The desired operation for phi number " << arg_idx << " in ";
-          // arg_block->printAsOperand(llvm::errs());
-          // llvm::errs() << " is the block argument of ";
-          // pred_block->printAsOperand(llvm::errs());
-          // llvm::errs() << "\n\n";
+          // If the block of the pred is the very first block, the pred is a global argument
+          if(one_pred_block == &funcReg.front()) {
+            phi->pred_type.emplace_back(GlobalArg);
+            Value val = branch_op.getSuccessorOperands(idx)[arg_idx];
+            phi->pred_global_arg.emplace_back(&val);
 
-          // identify the arg_idx of this value in the arguments of the pred_block
-          int pred_arg_idx  = 0;
-          for(BlockArgument arg : pred_block->getArguments()) {
-            if(arg == branch_op.getSuccessorOperands(idx)[arg_idx])
-              break;
-
-            pred_arg_idx++;
+            // identify which argument it is.. Will be handy in constructing the circuit in CfToHandshake
+            int pred_arg_idx  = 0;
+            for(BlockArgument arg : one_pred_block->getArguments()) {
+              if(arg == branch_op.getSuccessorOperands(idx)[arg_idx])
+                break;
+              pred_arg_idx++;
+            }
+            phi->pred_phi_arg_idx.emplace_back(pred_arg_idx);
+          } else {
+            // The block of the pred is in a middle block, the pred is another ssa phi
+           
+            // identify the arg_idx of this value in the arguments of the pred_block
+            int pred_arg_idx  = 0;
+            for(BlockArgument arg : one_pred_block->getArguments()) {
+              if(arg == branch_op.getSuccessorOperands(idx)[arg_idx])
+                break;
+              pred_arg_idx++;
+            }
+            phi->pred_type.emplace_back(Phi);
+            phi->pred_phi_arg_idx.emplace_back(pred_arg_idx);
+            // We add pred_phi later in fillPredPhis after identifying all ssa_phis
           }
-
-          phi->arg_idx_producer_operations.emplace_back(pred_arg_idx);
-          phi->is_phi_producer_operations.emplace_back(true);
         } else {
-          phi->is_phi_producer_operations.emplace_back(false);
-          phi->arg_idx_producer_operations.emplace_back(-1);
+          phi->pred_type.emplace_back(Oper);
+          phi->pred_phi_arg_idx.emplace_back(-1);
         }
-
-        phi->producer_operations.emplace_back(producer_operation);
-        phi->producer_blocks.emplace_back(pred_block);
       }
     }
-
   }
-
 }
 
 // Adds a new entry to the private field all_ssa_phis that is composed of SSAPhi
@@ -101,7 +104,7 @@ void GsaAnalysis::identifySsaPhis(func::FuncOp &funcOp) {
 
       // Create a new SSAPhi object
       SSAPhi* phi = new SSAPhi;
-      fillSsaPhiOps(phi, owner_block, arg_idx); 
+      identifySsaPhis_helper(funcReg, phi, owner_block, arg_idx); 
 
       // Add Phi only for Blocks that have multiple predecessors to avoid counting the initial block that directly take the function arguments
       if(!owner_block->getPredecessors().empty()) {
@@ -117,22 +120,22 @@ void GsaAnalysis::identifySsaPhis(func::FuncOp &funcOp) {
   }
 
   all_ssa_phis.emplace_back(ssa_phis);
-  fillProducerSsaPhis();
+  fillPredPhis();
 }
 
-void GsaAnalysis::fillProducerSsaPhis() {
+void GsaAnalysis::fillPredPhis() {
   for(auto& ssa_phi : all_ssa_phis[all_ssa_phis.size() - 1]) {
-    for(size_t i = 0; i < ssa_phi->producer_operations.size(); i++) {
-      if(ssa_phi->is_phi_producer_operations[i]){
-        // search for the ssa_phi that has owner block equivalent to producer_blocks[i] and arg_idx equivalent to arg_idx_producer_operations[i] 
-        Block* desired_block = ssa_phi->producer_blocks[i];
-        int desired_arg_idx = ssa_phi->arg_idx_producer_operations[i];
+    for(size_t i = 0; i < ssa_phi->pred_oper.size(); i++) {
+      if(ssa_phi->pred_type[i] == Phi){
+        // search for the ssa_phi that has owner block equivalent to pred_blocks[i] and arg_idx equivalent to pred_phi_arg_idx[i] 
+        Block* desired_block = ssa_phi->pred_block[i];
+        int desired_arg_idx = ssa_phi->pred_phi_arg_idx[i];
         for(auto& another_ssa_phi : all_ssa_phis[all_ssa_phis.size() - 1]) {
           if(another_ssa_phi == ssa_phi)
             continue;
 
           if(another_ssa_phi->owner_block == desired_block && another_ssa_phi->arg_idx == desired_arg_idx) {
-            ssa_phi->producer_ssa_phis.push_back(another_ssa_phi);
+            ssa_phi->pred_phi.push_back(another_ssa_phi);
           }
         }
       }
@@ -181,9 +184,9 @@ bool isCyclicPhis(SSAPhi* one_phi, SSAPhi* another_phi) {
   int phi_pred_count = 0;
   int pred_count = 0;
   // loop over the inputs of the another_phi
-  for(auto& phi_pred_flag : another_phi->is_phi_producer_operations) {
-     if(phi_pred_flag) {
-      if(another_phi->producer_ssa_phis[phi_pred_count] == one_phi) {
+  for(auto& phi_pred_flag : another_phi->pred_type) {
+     if(phi_pred_flag == Phi) {
+      if(another_phi->pred_phi[phi_pred_count] == one_phi) {
         flag_1 = true;
          break;
       }
@@ -195,9 +198,9 @@ bool isCyclicPhis(SSAPhi* one_phi, SSAPhi* another_phi) {
   bool flag_2 = false;
   phi_pred_count = 0;
   pred_count = 0;
-  for(auto& phi_pred_flag : one_phi->is_phi_producer_operations) {
-     if(phi_pred_flag) {
-      if(one_phi->producer_ssa_phis[phi_pred_count] == another_phi) {
+  for(auto& phi_pred_flag : one_phi->pred_type) {
+     if(phi_pred_flag == Phi) {
+      if(one_phi->pred_phi[phi_pred_count] == another_phi) {
         flag_2 = true;
          break;
       }
@@ -213,22 +216,25 @@ void printOnePhi(SSAPhi* one_phi) {
   int phi_pred_count = 0;
   int pred_count = 0;
   // loop over the inputs of the one_phi
-  for(auto& phi_pred_flag : one_phi->is_phi_producer_operations) {
-    if(phi_pred_flag) {
+  for(auto& phi_pred_flag : one_phi->pred_type) {
+    if(phi_pred_flag == Phi) {
       // this input is a Phi
-      if(!isCyclicPhis(one_phi, one_phi->producer_ssa_phis[phi_pred_count]))
-        printOnePhi(one_phi->producer_ssa_phis[phi_pred_count]);
+      if(!isCyclicPhis(one_phi, one_phi->pred_phi[phi_pred_count]))
+        printOnePhi(one_phi->pred_phi[phi_pred_count]);
       else {
         llvm::errs() << " cyclic phi in ";
-        one_phi->producer_ssa_phis[phi_pred_count]->owner_block->printAsOperand(llvm::errs());
+        one_phi->pred_phi[phi_pred_count]->owner_block->printAsOperand(llvm::errs());
         llvm::errs() << "  ";
       }
       phi_pred_count++;
+    } else if(phi_pred_flag == GlobalArg) {
+      llvm::errs() << " coming from global argument number " << one_phi->pred_phi_arg_idx[pred_count] << "\n";
     } else {
+      assert(phi_pred_flag == Oper);
       // this input is an operation
-      llvm::errs() << one_phi->producer_operations[pred_count]->getName();
+      llvm::errs() << one_phi->pred_oper[pred_count]->getName();
       llvm::errs() << " in ";
-      one_phi->producer_blocks[pred_count]->printAsOperand(llvm::errs());
+      one_phi->pred_block[pred_count]->printAsOperand(llvm::errs());
       llvm::errs() << "  ";
     }
     pred_count++;
@@ -258,19 +264,25 @@ void GsaAnalysis::printSsaPhis(int funcOp_idx) {
 //     one_phi->owner_block->printAsOperand(llvm::errs());
 //     llvm::errs() << " at arg_idx: ";
 //     llvm::errs() << one_phi->arg_idx << "\n";
-//     if(one_phi->producer_operations.size() == one_phi->is_phi_producer_operations.size() && one_phi->producer_operations.size() == one_phi->producer_blocks.size() && one_phi->producer_operations.size() == one_phi->arg_idx_producer_operations.size())
+//     if(one_phi->pred_oper.size() == one_phi->is_phi_pred_oper.size() && one_phi->pred_oper.size() == one_phi->pred_blocks.size() && one_phi->pred_oper.size() == one_phi->pred_phi_arg_idx.size())
 //       llvm::errs() << " has correct sizes \n";
 //     else
 //     llvm::errs() << " has INcorrect sizes \n";
 
 //     int count = 0;
-//     for(auto& flag : one_phi->is_phi_producer_operations) {
+//     for(auto& flag : one_phi->is_phi_pred_oper) {
 //       if(flag)
 //         count++;
 //     }
 
-//     if(count == one_phi->producer_ssa_phis.size())
+//     if(count == one_phi->pred_phi.size())
 //       llvm::errs() << "\tCORRECT\n";
 //     else
 //       llvm::errs() << "\tINCORRECT\n";
 //   }
+
+// llvm::errs() << "The desired operation for phi number " << arg_idx << " in ";
+// arg_block->printAsOperand(llvm::errs());
+// llvm::errs() << " is the block argument of ";
+// pred_block->printAsOperand(llvm::errs());
+// llvm::errs() << "\n\n";

@@ -2,7 +2,7 @@
 #include "dynamatic/Integration.h"
 
 int loop_multiply(in_int_t alpha, inout_int_t tmp[NI][NJ]) {
-  unsigned x = 3;
+  unsigned x = alpha;
   for (unsigned i = 0; i < N; ++i) {
     if (tmp[i][i] == 0)
       x = x * i;

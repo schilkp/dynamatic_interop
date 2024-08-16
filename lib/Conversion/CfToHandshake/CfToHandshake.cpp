@@ -424,6 +424,8 @@ LogicalResult HandshakeLowering::addProperSsaMerges(ConversionPatternRewriter &r
   SmallVector<SSAPhi *, 4> ssa_phis = gsaAnalysis.getSsaPhis(funcOpIdx);
   DenseMap<SSAPhi*, Operation*> phi_to_merge_map;
 
+  // TODO: find another way to initialize Merges due to the type errors of ui32
+
   // initialize the two operands of all ssa Merges to any dumb i32 value
   // we do so by looping through all operations, and checking the operand types in search for i32. Later on, we overwrite it 
   SmallVector<Value> mergeOperands;
@@ -466,18 +468,25 @@ LogicalResult HandshakeLowering::addProperSsaMerges(ConversionPatternRewriter &r
   for(auto& one_phi : ssa_phis) {
     SmallVector<Value> correct_predecessors;
     int phi_pred_count = 0;
+    int arg_pred_count = 0;
     int pred_count = 0;
-    for(auto& phi_pred_flag : one_phi->is_phi_producer_operations) {
-      if(phi_pred_flag) {
+    for(auto& pred_type : one_phi->pred_type) {
+      if(pred_type == Phi) {
         // predecessor is anoher ssa phi
-        Operation* pred_op = phi_to_merge_map[one_phi->producer_ssa_phis[phi_pred_count]];
+        Operation* pred_op = phi_to_merge_map[one_phi->pred_phi[phi_pred_count]];
         correct_predecessors.push_back(pred_op->getResult(0));
         phi_pred_count++;
+      } else if(pred_type == GlobalArg) {
+        // TODO: Fix the currently occuring segmentation fault. Maybe check how they retrieve START
+        Value* pred_val = one_phi->pred_global_arg[arg_pred_count];
+        correct_predecessors.push_back(*pred_val);
+        arg_pred_count++;
       } else {
+        assert(pred_type == Oper);
         // predecessor is an operation 
-        // Operation* pred_op = one_phi->producer_operations[pred_count];
-        // correct_predecessors.push_back(pred_op->getResult(0));
-        correct_predecessors.push_back(mergeOperands[0]);
+        Operation* pred_op = one_phi->pred_oper[pred_count];
+        correct_predecessors.push_back(pred_op->getResult(0));
+        //correct_predecessors.push_back(mergeOperands[0]);
       }
       pred_count++;
     }
@@ -2357,18 +2366,18 @@ private:
   PartialLoweringFunc fun;
 };
 
-// /// Strategy class for SSA maximization during std-to-handshake conversion.
-// /// Block arguments of type MemRefType and allocation operations are not
-// /// considered for SSA maximization.
-// class HandshakeLoweringSSAStrategy : public dynamatic::SSAMaximizationStrategy {
-//   /// Filters out block arguments of type MemRefType
-//   bool maximizeArgument(BlockArgument arg) override {
-//     return !arg.getType().isa<mlir::MemRefType>();
-//   }
+/// Strategy class for SSA maximization during std-to-handshake conversion.
+/// Block arguments of type MemRefType and allocation operations are not
+/// considered for SSA maximization.
+class HandshakeLoweringSSAStrategy : public dynamatic::SSAMaximizationStrategy {
+  /// Filters out block arguments of type MemRefType
+  bool maximizeArgument(BlockArgument arg) override {
+    return !arg.getType().isa<mlir::MemRefType>();
+  }
 
-//   /// Filters out allocation operations
-//   bool maximizeOp(Operation &op) override { return !isAllocOp(&op); }
-// };
+  /// Filters out allocation operations
+  bool maximizeOp(Operation &op) override { return !isAllocOp(&op); }
+};
 } // namespace
 
 LogicalResult
@@ -2398,8 +2407,7 @@ static LogicalResult lowerRegion(HandshakeLowering &hl) {
   //===--------------------------------------------------------------------===//
   // Merges and branches instantiation
   //===--------------------------------------------------------------------===//
-  if (failed(runPartialLowering(hl, &HandshakeLowering::addProperSsaMerges)))
-    return failure();
+  
 
   if (failed(runPartialLowering(hl, &HandshakeLowering::addMergeOps)))
     return failure();
@@ -2440,6 +2448,9 @@ static LogicalResult lowerRegion(HandshakeLowering &hl) {
     return failure();
 
   if (failed(runPartialLowering(hl, &HandshakeLowering::convertMergesToMuxes)))
+    return failure();
+
+  if (failed(runPartialLowering(hl, &HandshakeLowering::addProperSsaMerges)))
     return failure();
 
   
@@ -2484,11 +2495,11 @@ struct ConvertFuncToHandshake : OpConversionPattern<func::FuncOp> {
   matchAndRewrite(func::FuncOp funcOp, OpAdaptor operands,
                   ConversionPatternRewriter &rewriter) const override {
     // Put the function into maximal SSA form if it is not external
-    // if (!funcOp.isExternal()) {
-    //   HandshakeLoweringSSAStrategy strategy;
-    //   if (failed(dynamatic::maximizeSSA(funcOp.getBody(), strategy)))
-    //     return failure();
-    // }
+    if (!funcOp.isExternal()) {
+      HandshakeLoweringSSAStrategy strategy;
+      if (failed(dynamatic::maximizeSSA(funcOp.getBody(), strategy)))
+        return failure();
+    }
 
     // Derive attribute for the new function
     SmallVector<NamedAttribute, 4> attributes;

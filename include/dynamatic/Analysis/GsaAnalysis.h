@@ -24,6 +24,12 @@
 
 namespace dynamatic {
 
+enum PredType {
+  GlobalArg,
+  Oper,
+  Phi,
+};
+
 /// Analysis to return information about static single assignment and gated
 /// single assignment
 ///
@@ -31,14 +37,15 @@ struct SSAPhi {
   Block *owner_block;
   // holds the argument idx that this phi is corresponding to  
   int arg_idx;
-  SmallVector<Operation *, 4> producer_operations;
-  // flag that is set to true if any of the producer operations is an SSA Phi
-  SmallVector<bool, 4> is_phi_producer_operations;
-  SmallVector<int, 4> arg_idx_producer_operations;
-  SmallVector<Block*, 4> producer_blocks;
+  SmallVector<PredType, 4> pred_type;
+  SmallVector<Block*, 4> pred_block;  
+
+  SmallVector<Operation *, 4> pred_oper; 
+  SmallVector<Value* , 4> pred_global_arg;
 
   // gets filled in the end of the identifySsaPhis function
-  SmallVector<SSAPhi*, 4> producer_ssa_phis;
+  SmallVector<SSAPhi*, 4> pred_phi;
+  SmallVector<int, 4> pred_phi_arg_idx;
 };
 
 class GsaAnalysis {
@@ -95,7 +102,7 @@ private:
 
   void identifySsaPhis(mlir::func::FuncOp &funcOp);
 
-  void fillProducerSsaPhis();
+  void fillPredPhis();
 
    // helper function called inside adjustBlockPtr() function
   void compareNamesAndModifyBlockPtr(Block *new_block, Block *old_block);

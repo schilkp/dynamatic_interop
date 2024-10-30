@@ -23,6 +23,7 @@
 #include "dynamatic/Transforms/BufferPlacement/CFDFC.h"
 #include "dynamatic/Transforms/BufferPlacement/FPGA20Buffers.h"
 #include "dynamatic/Transforms/BufferPlacement/FPL22Buffers.h"
+#include "dynamatic/Transforms/BufferPlacement/CostAwareBuffers.h"
 #include "dynamatic/Transforms/HandshakeMaterialize.h"
 #include "experimental/Support/StdProfiler.h"
 #include "mlir/IR/OperationSupport.h"
@@ -42,7 +43,7 @@ static constexpr llvm::StringLiteral ON_MERGES("on-merges");
 #ifndef DYNAMATIC_GUROBI_NOT_INSTALLED
 /// Algorithms that do require solving an MILP.
 static constexpr llvm::StringLiteral FPGA20("fpga20"),
-    FPGA20_LEGACY("fpga20-legacy"), FPL22("fpl22");
+    FPGA20_LEGACY("fpga20-legacy"), FPL22("fpl22"), CostAware("costaware");
 #endif // DYNAMATIC_GUROBI_NOT_INSTALLED
 
 namespace {
@@ -121,6 +122,7 @@ void HandshakePlaceBuffersPass::runDynamaticPass() {
   allAlgorithms[FPGA20] = &HandshakePlaceBuffersPass::placeUsingMILP;
   allAlgorithms[FPGA20_LEGACY] = &HandshakePlaceBuffersPass::placeUsingMILP;
   allAlgorithms[FPL22] = &HandshakePlaceBuffersPass::placeUsingMILP;
+  allAlgorithms[CostAware] = &HandshakePlaceBuffersPass::placeUsingMILP;
 #endif // DYNAMATIC_GUROBI_NOT_INSTALLED
 
   // Check that the algorithm exists
@@ -470,6 +472,12 @@ LogicalResult HandshakePlaceBuffersPass::getBufferPlacement(
         logger, "out_of_cycle", placement, env, info, timingDB, targetCP);
   }
 
+  if (algorithm == CostAware) {
+    // Create and solve the MILP
+    return checkLoggerAndSolve<costaware::CostAwareBuffers>(
+        logger, "placement", placement, env, info, timingDB, targetCP);
+  }
+
   llvm_unreachable("unknown algorithm");
 }
 #endif // DYNAMATIC_GUROBI_NOT_INSTALLED
@@ -542,9 +550,22 @@ void HandshakePlaceBuffersPass::instantiateBuffers(BufferPlacement &placement) {
     auto placeBuffer = [&](const TimingInfo &timing, unsigned numSlots) {
       if (numSlots == 0)
         return;
+      StringRef bufferType;
+      if (timing == TimingInfo::oehb())
+        bufferType = BufferOp::DV_TYPE;
+      else if (timing == TimingInfo::tehb())
+        bufferType = BufferOp::R_TYPE;
+      else if (timing == TimingInfo::dvfifo())
+        bufferType = BufferOp::DVE_TYPE;
+      else if (timing == TimingInfo::tfifo())
+        bufferType = BufferOp::T_TYPE;
+      else if (timing == TimingInfo::dvse())
+        bufferType = BufferOp::DVSE_TYPE;
+      else if (timing == TimingInfo::dvr())
+        bufferType = BufferOp::DVR_TYPE;
 
       auto bufOp = builder.create<handshake::BufferOp>(
-          bufferIn.getLoc(), bufferIn, timing, numSlots);
+          bufferIn.getLoc(), bufferIn, timing, numSlots, bufferType);
       inheritBB(opDst, bufOp);
       nameAnalysis.setName(bufOp);
 
@@ -554,11 +575,19 @@ void HandshakePlaceBuffersPass::instantiateBuffers(BufferPlacement &placement) {
     };
 
     if (placeRes.opaqueBeforeTrans) {
-      placeBuffer(TimingInfo::oehb(), placeRes.numOpaque);
-      placeBuffer(TimingInfo::tehb(), placeRes.numTrans);
+      placeBuffer(TimingInfo::dvr(), placeRes.numDVR);
+      placeBuffer(TimingInfo::dvse(), placeRes.numDVSE);
+      placeBuffer(TimingInfo::oehb(), placeRes.numSlotOB);
+      placeBuffer(TimingInfo::dvfifo(), placeRes.numDVFIFO);
+      placeBuffer(TimingInfo::tfifo(), placeRes.numTFIFO);
+      placeBuffer(TimingInfo::tehb(), placeRes.numSlotTB);
     } else {
-      placeBuffer(TimingInfo::tehb(), placeRes.numTrans);
-      placeBuffer(TimingInfo::oehb(), placeRes.numOpaque);
+      placeBuffer(TimingInfo::tehb(), placeRes.numSlotTB);
+      placeBuffer(TimingInfo::tfifo(), placeRes.numTFIFO);
+      placeBuffer(TimingInfo::dvfifo(), placeRes.numDVFIFO);
+      placeBuffer(TimingInfo::oehb(), placeRes.numSlotOB);
+      placeBuffer(TimingInfo::dvse(), placeRes.numDVSE);
+      placeBuffer(TimingInfo::dvr(), placeRes.numDVR);
     }
   }
 }

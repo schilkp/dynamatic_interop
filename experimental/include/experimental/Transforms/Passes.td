@@ -97,4 +97,11 @@ def CreditBasedSharing : DynamaticPass<"credit-based-sharing"> {
       "'buffer-placement' at the binary's location.">];
 }
 
+def HandshakeRigidification : DynamaticPass<"handshake-rigidification"> {
+  let summary = "Make all channels rigid.";
+  let description = [{
+    Make all channels rigid. 
+  }];
+  let constructor = "dynamatic::experimental::rigidification::createHandshakeRigidification()";
+}
 #endif // EXPERIMENTAL_TRANSFORMS_PASSES_TD

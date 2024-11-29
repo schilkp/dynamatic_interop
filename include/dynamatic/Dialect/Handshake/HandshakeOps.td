@@ -1175,6 +1175,20 @@ def UnbundleOp : Handshake_Op<"unbundle", [
   let hasVerifier = 1;
 }
 
+def RigidificationOp : Handshake_Op<"rigidification",[
+SameOperandsAndResultType
+]> {
+  let summary = [{
+    Rigidifies a channel by setting the output valid signal to 1 and input valid signal to a open.
+  }];
+  let description = [{
+    Rigidifies a channel by setting the output valid signal to 1 and input valid signal to a open.
+  }];
+
+  let arguments = (ins HandshakeType:$channelIn);
+  let results = (outs HandshakeType:$channelOut);
+}
+
 def ChannelReshapeTypeAttr : I32EnumAttr<
     "ChannelReshapeType", "",
     [

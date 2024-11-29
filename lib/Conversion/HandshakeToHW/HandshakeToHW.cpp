@@ -612,6 +612,10 @@ ModuleDiscriminator::ModuleDiscriminator(Operation *op) {
         addType("INPUT_TYPE", op->getOperand(0));
         addType("OUTPUT_TYPE", op->getResult(0));
       })
+      .Case<handshake::RigidificationOp>([&](auto) {
+        // Input bitwidth and output bitwidth
+        addType("DATA_TYPE", op->getOperand(0));
+      })
       .Default([&](auto) {
         op->emitError() << "This operation cannot be lowered to RTL "
                            "due to a lack of an RTL implementation for it.";
@@ -1715,6 +1719,7 @@ public:
                     ConvertToHWInstance<handshake::LoadOp>,
                     ConvertToHWInstance<handshake::StoreOp>,
                     ConvertToHWInstance<handshake::NotOp>,
+                    ConvertToHWInstance<handshake::RigidificationOp>,
                     ConvertToHWInstance<handshake::SharingWrapperOp>,
                     // Arith operations
                     ConvertToHWInstance<handshake::AddFOp>,

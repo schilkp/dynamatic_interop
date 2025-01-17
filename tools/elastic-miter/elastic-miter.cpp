@@ -115,49 +115,202 @@ static FailureOr<StringAttr> mergeModules(ModuleOp dest, ModuleOp src,
   return newName;
 }
 
+// TODO rewrite this
+static LogicalResult prefixOperation(Operation &op, std::string prefix) {
+  NamedAttribute attr = op.getAttrDictionary().getNamed("handshake.name").value(); // TODO check if it exists, also WTF is this?
+  Attribute value = attr.getValue();
+  auto name = value.dyn_cast<StringAttr>();
+  if(!name) return failure();
+  std::string old_name = name.getValue().str();
+  std::string new_name = prefix;
+  new_name.append(old_name);
+  StringAttr newNameAttr = StringAttr::get(op.getContext(), new_name);
+  op.setAttr("handshake.name", newNameAttr);
+  return success();
+
+}
+
 // Parse one or two MLIR modules and merge it into a single module.
 static FailureOr<OwningOpRef<ModuleOp>>
 parseAndMergeModules(MLIRContext &context) {
 
-  llvm::StringRef filename("../tools/lec/rewrites/a_lhs.mlir");
-  llvm::StringRef filename2("../tools/lec/rewrites/a_rhs.mlir");
+  llvm::StringRef filename("../tools/elastic-miter/rewrites/a_lhs.mlir");
+  llvm::StringRef filename2("../tools/elastic-miter/rewrites/a_rhs.mlir");
   OwningOpRef<ModuleOp> lhs_module = parseSourceFile<ModuleOp>(filename, &context);
+  OwningOpRef<ModuleOp> rhs_module = parseSourceFile<ModuleOp>(filename2, &context);
+
+  // The module can only have one function so we just take the first element TODO add a check for this
+  handshake::FuncOp lhs_funcOp = *lhs_module->getOps<handshake::FuncOp>().begin();
+  handshake::FuncOp rhs_funcOp = *rhs_module->getOps<handshake::FuncOp>().begin();
+
 
   OpBuilder builder(&context);
 
-  // Iterate over the module's operations.
-  for (handshake::FuncOp funcOp : lhs_module->getOps<handshake::FuncOp>()) {
-    for (handshake::EndOp op : funcOp.getOps<handshake::EndOp>()) {
-      builder.setInsertionPoint(op);
-      Operation::operand_range operands = op->getOperands();
-      for(int i = 0; i < operands.size(); i++) {
-        handshake::BufferOp newBufferOp = builder.create<handshake::BufferOp>(op.getLoc(), operands[i]);
-        Value bufferRes = newBufferOp.getResult();
-        op.setOperand(i, bufferRes);
+  ModuleOp new_module = ModuleOp::create(builder.getUnknownLoc());
+
+  int output_size = lhs_funcOp.getResultTypes().size();
+  std::cout << "We havbe " << output_size << " outputs" << std::endl;
+  handshake::ChannelType outputType = handshake::ChannelType::get(builder.getI1Type());
+  llvm::SmallVector<mlir::Type> outputTypes(output_size, outputType);  // replace all output with i1 which represent the result of the comparison
+  mlir::FunctionType funcType = builder.getFunctionType(lhs_funcOp.getResultTypes(), outputTypes);
+
+  // Create the function
+  handshake::FuncOp new_funcOp = builder.create<handshake::FuncOp>(builder.getUnknownLoc(), "elastic_miter", funcType);
+
+  // Add the function to the module
+  new_module.push_back(new_funcOp);
+
+  // Add an entry block to the function and populate it
+  // mlir::Block *entryBlock = new_funcOp.addBlock();
+  // builder.setInsertionPointToStart(entryBlock);
+  // mlir::Block *newBlock = new_funcOp.addEntryBlock();
+
+  for(Block &block : new_funcOp.getBlocks()) {
+    std::cout << "Hello there" << __LINE__ << std::endl;
+    // builder.setInsertionPointToStart(&block);
+  }
+
+  OpPrintingFlags printingFlags;
+  new_module->print(llvm::outs(), printingFlags);
+
+
+  Operation *previousOp = new_funcOp;
+  for(Operation &op : llvm::make_early_inc_range(rhs_funcOp.getOps())) {
+    op.moveAfter(previousOp);
+    previousOp = &op;
+  }
+
+  new_module->print(llvm::outs(), printingFlags);
+
+  
+
+  /* TODO:
+  3: Add auxillary operations
+  4: Connect those operations up
+  5: Delete original end operations
+  6: Create new end operation and connect result of eq to it
+  
+  */
+
+
+
+  // Rename the operations in the existing lhs module
+  for (Operation &op : lhs_funcOp.getOps()) {
+    prefixOperation(op, "lhs_");
+  }
+  // Rename the operations in the existing rhs module
+  for (Operation &op : rhs_funcOp.getOps()) {
+    prefixOperation(op, "rhs_");
+  }
+
+
+  for (unsigned i = 0; i < lhs_funcOp.getNumArguments(); ++i) {
+    mlir::BlockArgument blockArg = lhs_funcOp.getArgument(i);
+
+    // llvm::outs() << "  Block Argument " << i << "\n";
+    // llvm::outs() << "    Index: " << blockArg.getArgNumber() << "\n";
+    // llvm::outs() << "    Type: " << blockArg.getType() << "\n";
+  }
+
+  for(Block &block : lhs_funcOp.getBlocks()) {
+    builder.setInsertionPointToStart(&block);
+  }
+
+  handshake::ForkOp forkOp = nullptr;
+  for (unsigned i = 0; i < lhs_funcOp.getNumArguments(); ++i) {
+    mlir::BlockArgument blockArg  = lhs_funcOp.getArgument(i);
+    mlir::BlockArgument blockArg2 = rhs_funcOp.getArgument(i);
+
+
+    forkOp = builder.create<handshake::ForkOp>(lhs_funcOp.getLoc(), blockArg.getType(), blockArg);
+
+    // Replace the usages of the inputs with the newly created fork
+    for (Operation *op :  llvm::make_early_inc_range(blockArg.getUsers())) {
+      // Do not replace the new fork's input
+      if (op == forkOp) {
+        continue;
       }
+      op->replaceUsesOfWith(blockArg, forkOp.getResults()[0]);
+    }
 
-
-      // std::cout << op.getName().getStringRef().str() << std::endl;
+    // Move operations from rhs_funcOp to lhs_funcOp and replace the argument with the fork's output
+    for (Operation *op : llvm::make_early_inc_range(blockArg2.getUsers())) {
+      // op->moveAfter(forkOp);
+      op->replaceUsesOfWith(blockArg2, forkOp.getResults()[0]);
     }
   }
-  std::cout << "Hello there " << __FILE__ << ":"<< __LINE__ << std::endl;
 
-  OpPrintingFlags pf;
-  lhs_module->print(llvm::outs(), pf);
+  handshake::EndOp lhs_endOp;
+  for (handshake::EndOp endOp : llvm::make_early_inc_range(lhs_funcOp.getOps<handshake::EndOp>())) {
+    lhs_endOp = endOp;
+  }
+
+  handshake::EndOp rhs_endOp;
+  for (handshake::EndOp endOp : llvm::make_early_inc_range(rhs_funcOp.getOps<handshake::EndOp>())) {
+    // TODO get Operands first
+    rhs_endOp = endOp;
+    // endOp.erase();
+  }
+
+  llvm::SmallVector<mlir::Value> eq_results;
+  for (unsigned i = 0; i < lhs_endOp.getOperands().size(); ++i) {
+    Value lhs_result = lhs_endOp.getOperand(i);
+    Value rhs_result = rhs_endOp.getOperand(i);
+
+    handshake::CmpIOp compOp = builder.create<handshake::CmpIOp>(lhs_endOp.getLoc(), handshake::CmpIPredicate::eq, lhs_result, rhs_result);
+    eq_results.push_back(compOp.getResult());
+  }
+
+  handshake::EndOp newEndOp = builder.create<handshake::EndOp>(lhs_endOp.getLoc(), eq_results);
+  lhs_endOp.erase();
+  rhs_endOp.erase();
+
+  // Operation *previousOp = forkOp;
+  for(Operation &op : llvm::make_early_inc_range(rhs_funcOp.getOps())) {
+    op.moveAfter(previousOp);
+    previousOp = &op;
+  }
+
+
+  lhs_module->print(llvm::outs(), printingFlags);
+
+
+
+
+  for(Operation &op : lhs_funcOp.getOps()) {
+    std::cout << "FuncOp getOps getName " << op.getName().getStringRef().str() << std::endl;
+    // op.getName().str()
+  }
+
+  // for(Attribute attr : lhs_funcOp.getArgAttrs()) {
+  //   std::cout << "Hello there " << attr.dyn_cast<StringAttr>().str() << std::endl;
+  //   // op.getName().str()
+  // }
+
+  // handshake::ForkOp newForkOp = builder.create<handshake::ForkOp>(builder.getUnknownLoc(), lhs_funcOp.getOps());
+
+  for (handshake::EndOp op : lhs_funcOp.getOps<handshake::EndOp>()) {
+    builder.setInsertionPoint(op);
+    Operation::operand_range operands = op->getOperands();
+    for(size_t i = 0; i < operands.size(); i++) {
+      handshake::BufferOp newBufferOp = builder.create<handshake::BufferOp>(op.getLoc(), operands[i]);
+      Value bufferRes = newBufferOp.getResult();
+      op.setOperand(i, bufferRes);
+    }
+  }
   
 
   if (!lhs_module) {
     return failure();
   }
 
-  auto moduleOpt = parseSourceFile<ModuleOp>(filename2, &context);
-  if (!moduleOpt)
+  if (!rhs_module)
     return failure();
-  auto result = mergeModules(lhs_module.get(), moduleOpt.get(),
-                              StringAttr::get(&context, secondModuleName));
-  if (failed(result)) {
-    return failure();
-  }
+  // auto result = mergeModules(lhs_module.get(), rhs_module.get(),
+  //                             StringAttr::get(&context, secondModuleName));
+  // if (failed(result)) {
+  //   return failure();
+  // }
   return lhs_module;
 }
 
@@ -168,8 +321,6 @@ static LogicalResult executeLEC(MLIRContext &context) {
   auto parsedModule = parseAndMergeModules(context);
   if (failed(parsedModule))
     return failure();
-
-  std::cout << "Hello there" << __LINE__ << std::endl;
 
   OwningOpRef<ModuleOp> module = std::move(parsedModule.value());
 
@@ -184,7 +335,7 @@ static LogicalResult executeLEC(MLIRContext &context) {
   }
 
   OpPrintingFlags printingFlags;
-  module->print(outputFile.value()->os(), printingFlags);
+  // module->print(outputFile.value()->os(), printingFlags);
   outputFile.value()->keep();
   return success();
 }
@@ -194,35 +345,24 @@ static LogicalResult executeLEC(MLIRContext &context) {
 /// registers all dialects within a MLIR context,
 /// and calls the `executeLEC` function to do the actual work.
 int main(int argc, char **argv) {
-
-  std::cout << "Hello there " << __FILE__ << ":"<< __LINE__ << std::endl;
   llvm::InitLLVM y(argc, argv);
-  std::cout << "Hello there" << __LINE__ << std::endl;
 
   // Register any pass manager command line options.
   registerMLIRContextCLOptions();
   registerPassManagerCLOptions();
   registerDefaultTimingManagerCLOptions();
   registerAsmPrinterCLOptions();
-  std::cout << "Hello there" << __LINE__ << std::endl;
 
-  // Register the supported CIRCT dialects and create a context to work with.
+  // Register the supported dynamatic dialects and create a context to work with.
   DialectRegistry registry;
   dynamatic::registerAllDialects(registry);
-  // registry.insert<mlir::func::FuncDialect, mlir::LLVM::LLVMDialect,
-  //                 mlir::arith::ArithDialect, mlir::BuiltinDialect>();
-  // mlir::func::registerInlinerExtension(registry);
-  // mlir::registerBuiltinDialectTranslation(registry);
-  // mlir::registerLLVMDialectTranslation(registry);
   MLIRContext context(registry);
 
-  std::cout << "Hello there" << __LINE__ << std::endl;
   // Setup of diagnostic handling.
   llvm::SourceMgr sourceMgr;
   SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
   // Avoid printing a superfluous note on diagnostic emission.
   context.printOpOnDiagnostic(false);
-  std::cout << "Hello there" << __LINE__ << std::endl;
 
   // Perform the logical equivalence checking; using `exit` to avoid the slow
   // teardown of the MLIR context.

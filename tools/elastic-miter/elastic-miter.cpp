@@ -172,7 +172,7 @@ parseAndMergeModules(MLIRContext &context) {
   mlir::FunctionType funcType = builder.getFunctionType(lhs_funcOp.getArgumentTypes(), outputTypes);
 
   // Create the function
-  handshake::FuncOp new_funcOp = builder.create<handshake::FuncOp>(builder.getUnknownLoc(), "elastic_miter", lhs_funcOp.getFunctionType(), arrayRef2);
+  handshake::FuncOp new_funcOp = builder.create<handshake::FuncOp>(builder.getUnknownLoc(), "elastic_miter", funcType, arrayRef2);
 
   // Create a block and put it in the funcOp, this is borrowed from func::funcOp.addEntryBlock()
   Block *entry = new Block();
@@ -191,28 +191,17 @@ parseAndMergeModules(MLIRContext &context) {
   // Add the function to the module
   new_module.push_back(new_funcOp);
 
-  for (const auto &attr : lhs_funcOp->getAttrs()) {
-      llvm::outs() << "Attribute name: " << attr.getName() 
-                    << ", Attribute value: " << attr.getValue() << "\n";
-  }
-  for (const auto &attr : new_funcOp->getAttrs()) {
-        llvm::outs() << "Attribute name: " << attr.getName() 
-                     << ", Attribute value: " << attr.getValue() << "\n";
-  }
+  // for (const auto &attr : lhs_funcOp->getAttrs()) {
+  //     llvm::outs() << "Attribute name: " << attr.getName()
+  //                   << ", Attribute value: " << attr.getValue() << "\n";
+  // }
 
   new_module->print(llvm::outs(), printingFlags);
 
-  std::cout << new_funcOp.getArguments().size() << std::endl;
-  handshake::ConditionalBranchOp newcond_br = builder.create<handshake::ConditionalBranchOp>(new_funcOp.getLoc(), new_funcOp.getArgument(1), new_funcOp.getArgument(0));
-  // handshake::EndOp newEndOp = builder.create<handshake::EndOp>(newcond_br.getLoc(), newcond_br.getTrueResult(), newcond_br.getFalseResult());
-  ValueRange res = {newcond_br.getTrueResult(), newcond_br.getFalseResult()};
-  handshake::EndOp newEndOp = builder.create<handshake::EndOp>(newcond_br.getLoc(), res);
-
-  new_module->print(llvm::outs(), printingFlags);
 
   /* TODO:
   3: Add auxillary operations
-  4: Connect those operations up 
+  4: Connect those operations up
   */
 
 
@@ -234,86 +223,71 @@ parseAndMergeModules(MLIRContext &context) {
     // llvm::outs() << "    Type: " << blockArg.getType() << "\n";
   }
 
-  for(Block &block : lhs_funcOp.getBlocks()) {
-    builder.setInsertionPointToStart(&block);
-  }
+  builder.setInsertionPointToStart(entry);
 
   handshake::ForkOp forkOp = nullptr;
   for (unsigned i = 0; i < lhs_funcOp.getNumArguments(); ++i) {
     BlockArgument blockArg  = lhs_funcOp.getArgument(i);
     BlockArgument blockArg2 = rhs_funcOp.getArgument(i);
-    // BlockArgument blockArg3 = new_funcOp.getArgument(i);
+    BlockArgument blockArg3 = new_funcOp.getArgument(i);
 
 
-    forkOp = builder.create<handshake::ForkOp>(lhs_funcOp.getLoc(), blockArg.getType(), blockArg);
+    forkOp = builder.create<handshake::ForkOp>(new_funcOp.getLoc(), blockArg3.getType(), blockArg3);
 
-    // Replace the usages of the inputs with the newly created fork
-    for (Operation *op :  llvm::make_early_inc_range(blockArg.getUsers())) {
-      // Do not replace the new fork's input
-      if (op == forkOp) {
-        continue;
-      }
+
+    // Use the newly created fork's output instead of the origial argument in the lhs_funcOp's operations
+    for (Operation *op : llvm::make_early_inc_range(blockArg.getUsers())) {
       op->replaceUsesOfWith(blockArg, forkOp.getResults()[0]);
     }
-
-    // Move operations from rhs_funcOp to lhs_funcOp and replace the argument with the fork's output
+    // Use the newly created fork's output instead of the origial argument in the rhs_funcOp's operations
     for (Operation *op : llvm::make_early_inc_range(blockArg2.getUsers())) {
-      // op->moveAfter(forkOp);
       op->replaceUsesOfWith(blockArg2, forkOp.getResults()[0]);
     }
   }
 
+  // Get lhs and rhs EndOp TODO without loop
   handshake::EndOp lhs_endOp;
   for (handshake::EndOp endOp : llvm::make_early_inc_range(lhs_funcOp.getOps<handshake::EndOp>())) {
     lhs_endOp = endOp;
   }
-
   handshake::EndOp rhs_endOp;
   for (handshake::EndOp endOp : llvm::make_early_inc_range(rhs_funcOp.getOps<handshake::EndOp>())) {
     rhs_endOp = endOp;
   }
 
+
+  // Create comparison logic
   llvm::SmallVector<mlir::Value> eq_results;
   for (unsigned i = 0; i < lhs_endOp.getOperands().size(); ++i) {
     Value lhs_result = lhs_endOp.getOperand(i);
     Value rhs_result = rhs_endOp.getOperand(i);
 
-    handshake::CmpIOp compOp = builder.create<handshake::CmpIOp>(lhs_endOp.getLoc(), handshake::CmpIPredicate::eq, lhs_result, rhs_result);
-    lhs_endOp.setOperand(i, compOp.getResult());
+    handshake::CmpIOp compOp = builder.create<handshake::CmpIOp>(builder.getUnknownLoc(), handshake::CmpIPredicate::eq, lhs_result, rhs_result);
     eq_results.push_back(compOp.getResult());
   }
 
+  handshake::EndOp newEndOp = builder.create<handshake::EndOp>(builder.getUnknownLoc(), eq_results);
+
+  // Delete old end operation, we can only have one end operation in a function
   rhs_endOp.erase();
+  lhs_endOp.erase();
 
 
-  lhs_funcOp.setType(funcType);
-  // DictionaryAttr lhs_AttrDict = lhs_funcOp->getAttrDictionary();
-
-  lhs_funcOp->setAttr("sym_name", builder.getStringAttr("elastic_miter"));
-
+  // Move operations from lhs to new
   Operation *previousOp = forkOp;
+  for(Operation &op : llvm::make_early_inc_range(lhs_funcOp.getOps())) {
+    op.moveAfter(previousOp);
+    previousOp = &op;
+  }
+
+  // Move operations from lhs to new
   for(Operation &op : llvm::make_early_inc_range(rhs_funcOp.getOps())) {
     op.moveAfter(previousOp);
     previousOp = &op;
   }
 
-  lhs_module->print(llvm::outs(), printingFlags);
-  for (const auto &attr : lhs_funcOp->getAttrs()) {
-    llvm::outs() << "Attribute name: " << attr.getName() 
-                 << ", Attribute value: " << attr.getValue() << "\n";
-  }
+  new_module->print(llvm::outs(), printingFlags);
 
-
-  for (handshake::EndOp op : lhs_funcOp.getOps<handshake::EndOp>()) {
-    builder.setInsertionPoint(op);
-    Operation::operand_range operands = op->getOperands();
-    for(size_t i = 0; i < operands.size(); i++) {
-      handshake::BufferOp newBufferOp = builder.create<handshake::BufferOp>(op.getLoc(), operands[i]);
-      Value bufferRes = newBufferOp.getResult();
-      op.setOperand(i, bufferRes);
-    }
-  }
-  
 
   if (!lhs_module) {
     return failure();
@@ -332,7 +306,7 @@ parseAndMergeModules(MLIRContext &context) {
 /// This functions initializes the various components of the tool and
 /// orchestrates the work to be done.
 static LogicalResult executeLEC(MLIRContext &context) {
-  
+
   auto parsedModule = parseAndMergeModules(context);
   if (failed(parsedModule))
     return failure();

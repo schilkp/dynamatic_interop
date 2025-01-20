@@ -1,41 +1,24 @@
-//===- circt-lec.cpp - The circt-lec driver ---------------------*- C++ -*-===//
+//===- elastic-miter.cpp - The elastic-miter driver -------------*- C++ -*-===//
 //
-// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
+// Dynamatic is under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 //
 //===----------------------------------------------------------------------===//
-///
-/// This file initiliazes the 'circt-lec' tool, which interfaces with a logical
-/// engine to allow its user to check whether two input circuit descriptions
-/// are equivalent, and when not provides a counterexample as for why.
-///
+//
+// This file implements the elastic-miter tool, it creates an elastic miter
+// circuit, which can later be used to formally verify equivalence of two
+// handshake circuits.
+//
 //===----------------------------------------------------------------------===//
 
-#include "mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/Dialect/Func/Extensions/InlinerExtension.h"
-#include "mlir/Dialect/Func/IR/FuncOps.h"
-#include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
-#include "mlir/IR/BuiltinDialect.h"
-#include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/OwningOpRef.h"
-#include "mlir/IR/MLIRContext.h"
 #include "mlir/Parser/Parser.h"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Export.h"
 #include "mlir/Transforms/Passes.h"
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/InitLLVM.h"
-#include "llvm/Support/PrettyStackTrace.h"
-#include "llvm/Support/SourceMgr.h"
-#include "llvm/Support/ToolOutputFile.h"
 
-
-#include <iostream>
 #include "dynamatic/InitAllDialects.h"
 #include "dynamatic/Dialect/Handshake/HandshakeOps.h"
 
@@ -47,96 +30,28 @@ using namespace dynamatic;
 // TODO remove this
 OpPrintingFlags printingFlags;
 
-
-//===----------------------------------------------------------------------===//
-// Command-line options declaration
-//===----------------------------------------------------------------------===//
-
-static cl::OptionCategory mainCategory("circt-lec Options");
-
-static cl::opt<std::string> firstModuleName(
-    "c1", cl::Required,
-    cl::desc("Specify a named module for the first circuit of the comparison"),
-    cl::value_desc("module name"), cl::cat(mainCategory));
-
-static cl::opt<std::string> secondModuleName(
-    "c2", cl::Required,
-    cl::desc("Specify a named module for the second circuit of the comparison"),
-    cl::value_desc("module name"), cl::cat(mainCategory));
-
-static cl::list<std::string> inputFilenames(cl::Positional, cl::OneOrMore,
-                                            cl::desc("<input files>"),
-                                            cl::cat(mainCategory));
-
-static cl::opt<std::string> outputFilename("o", cl::desc("Output filename"),
-                                           cl::value_desc("filename"),
-                                           cl::init("-"),
-                                           cl::cat(mainCategory));
-
-static cl::opt<bool>
-    verifyPasses("verify-each",
-                 cl::desc("Run the verifier after each transformation pass"),
-                 cl::init(true), cl::cat(mainCategory));
-
-static cl::opt<bool>
-    verbosePassExecutions("verbose-pass-executions",
-                          cl::desc("Log executions of toplevel module passes"),
-                          cl::init(false), cl::cat(mainCategory));
+// Command line TODO actually use arguments
+static cl::OptionCategory mainCategory("elastic-miter Options");
 
 
-//===----------------------------------------------------------------------===//
-// Tool implementation
-//===----------------------------------------------------------------------===//
-
-// Move all operations in `src` to `dest`. Rename all symbols in `src` to avoid
-// conflict.
-static FailureOr<StringAttr> mergeModules(ModuleOp dest, ModuleOp src,
-                                          StringAttr name) {
-
-  SymbolTable destTable(dest), srcTable(src);
-  StringAttr newName = {};
-  for (auto &op : src.getOps()) {
-    if (SymbolOpInterface symbol = dyn_cast<SymbolOpInterface>(op)) {
-      auto oldSymbol = symbol.getNameAttr();
-      // auto result = renameToUnique(&srcTable, op.getAttrOfType<StringAttr>(SymbolTable::getSymbolAttrName()));
-      // if (failed(result))
-      //   return src->emitError() << "failed to rename symbol " << oldSymbol;
-
-      if (oldSymbol == name) {
-        assert(!newName && "symbol must be unique");
-        // newName = *result;
-      }
-    }
-  }
-
-  // if (!newName)
-  //   return src->emitError()
-  //          << "module " << name << " was not found in the second module";
-
-  dest.getBody()->getOperations().splice(dest.getBody()->begin(),
-                                         src.getBody()->getOperations());
-  return newName;
-}
-
-// TODO rewrite this
+// TODO documentation
 static LogicalResult prefixOperation(Operation &op, std::string prefix) {
-  NamedAttribute attr = op.getAttrDictionary().getNamed("handshake.name").value(); // TODO check if it exists, also WTF is this?
-  Attribute value = attr.getValue();
-  auto name = value.dyn_cast<StringAttr>();
-  if(!name) return failure();
-  std::string old_name = name.getValue().str();
-  std::string new_name = prefix;
-  new_name.append(old_name);
-  StringAttr newNameAttr = StringAttr::get(op.getContext(), new_name);
-  op.setAttr("handshake.name", newNameAttr);
-  return success();
+  auto nameAttr = op.getAttrOfType<StringAttr>("handshake.name");
+  if (!nameAttr)
+      return failure();
 
+  std::string new_name = prefix + nameAttr.getValue().str();
+
+  op.setAttr("handshake.name", StringAttr::get(op.getContext(), new_name));
+
+  return success();
 }
 
-// Parse one or two MLIR modules and merge it into a single module.
+// create the elatic miter module, given two circuits
 static FailureOr<OwningOpRef<ModuleOp>>
-parseAndMergeModules(MLIRContext &context) {
+createElasticMiter(MLIRContext &context) {
 
+  // TODO use arguments
   llvm::StringRef filename("../tools/elastic-miter/rewrites/a_lhs.mlir");
   llvm::StringRef filename2("../tools/elastic-miter/rewrites/a_rhs.mlir");
   OwningOpRef<ModuleOp> lhs_module = parseSourceFile<ModuleOp>(filename, &context);
@@ -163,15 +78,15 @@ parseAndMergeModules(MLIRContext &context) {
 
   ArrayRef<NamedAttribute> arrayRef2({arg_named_attr, res_named_attr});
 
-  ModuleOp new_module = ModuleOp::create(builder.getUnknownLoc());
+  OwningOpRef<ModuleOp> miterModule = ModuleOp::create(builder.getUnknownLoc());
 
   int output_size = lhs_funcOp.getResultTypes().size();
-  std::cout << "We havbe " << output_size << " outputs" << std::endl;
+
   handshake::ChannelType i1_ChannelType = handshake::ChannelType::get(builder.getI1Type());
   llvm::SmallVector<mlir::Type> outputTypes(output_size, i1_ChannelType);  // replace all output with i1 which represent the result of the comparison
   mlir::FunctionType funcType = builder.getFunctionType(lhs_funcOp.getArgumentTypes(), outputTypes);
 
-  // Create the function
+  // Create the miter function
   handshake::FuncOp new_funcOp = builder.create<handshake::FuncOp>(builder.getUnknownLoc(), "elastic_miter", funcType, arrayRef2);
 
   // Create a block and put it in the funcOp, this is borrowed from func::funcOp.addEntryBlock()
@@ -183,20 +98,13 @@ parseAndMergeModules(MLIRContext &context) {
   // FIXME: Allow for passing in locations for these arguments instead of using
   // the operations location.
   ArrayRef<Type> inputTypes = new_funcOp.getArgumentTypes();
-  std::cout << __FILE__ << ":" << __LINE__ << "  " << inputTypes.size() << std::endl;
   SmallVector<Location> locations(inputTypes.size(),
                                   new_funcOp.getOperation()->getLoc());
   entry->addArguments(inputTypes, locations);
 
+
   // Add the function to the module
-  new_module.push_back(new_funcOp);
-
-  // for (const auto &attr : lhs_funcOp->getAttrs()) {
-  //     llvm::outs() << "Attribute name: " << attr.getName()
-  //                   << ", Attribute value: " << attr.getValue() << "\n";
-  // }
-
-  new_module->print(llvm::outs(), printingFlags);
+  miterModule->push_back(new_funcOp);
 
 
   /* TODO:
@@ -205,22 +113,13 @@ parseAndMergeModules(MLIRContext &context) {
   */
 
 
-  // Rename the operations in the existing lhs module
+  // Rename the operations in the existing lhs module TODO check for success
   for (Operation &op : lhs_funcOp.getOps()) {
     prefixOperation(op, "lhs_");
   }
-  // Rename the operations in the existing rhs module
+  // Rename the operations in the existing rhs module TODO check for success
   for (Operation &op : rhs_funcOp.getOps()) {
     prefixOperation(op, "rhs_");
-  }
-
-
-  for (unsigned i = 0; i < lhs_funcOp.getNumArguments(); ++i) {
-    mlir::BlockArgument blockArg = lhs_funcOp.getArgument(i);
-
-    // llvm::outs() << "  Block Argument " << i << "\n";
-    // llvm::outs() << "    Index: " << blockArg.getArgNumber() << "\n";
-    // llvm::outs() << "    Type: " << blockArg.getType() << "\n";
   }
 
   builder.setInsertionPointToStart(entry);
@@ -286,74 +185,27 @@ parseAndMergeModules(MLIRContext &context) {
     previousOp = &op;
   }
 
-  new_module->print(llvm::outs(), printingFlags);
+  miterModule->print(llvm::outs(), printingFlags);
 
 
-  if (!lhs_module) {
+  if (!miterModule) {
     return failure();
   }
-
-  if (!rhs_module)
-    return failure();
-  // auto result = mergeModules(lhs_module.get(), rhs_module.get(),
-  //                             StringAttr::get(&context, secondModuleName));
-  // if (failed(result)) {
-  //   return failure();
-  // }
-  return lhs_module;
+  return miterModule;
 }
 
-/// This functions initializes the various components of the tool and
-/// orchestrates the work to be done.
-static LogicalResult executeLEC(MLIRContext &context) {
 
-  auto parsedModule = parseAndMergeModules(context);
-  if (failed(parsedModule))
-    return failure();
-
-  OwningOpRef<ModuleOp> module = std::move(parsedModule.value());
-
-  // Create the output directory or output file depending on our mode.
-  std::optional<std::unique_ptr<llvm::ToolOutputFile>> outputFile;
-  std::string errorMessage;
-  // Create an output file.
-  outputFile.emplace(openOutputFile(outputFilename, &errorMessage));
-  if (!outputFile.value()) {
-    llvm::errs() << errorMessage << "\n";
-    return failure();
-  }
-
-  // OpPrintingFlags printingFlags;
-  // module->print(outputFile.value()->os(), printingFlags);
-  outputFile.value()->keep();
-  return success();
-}
-
-/// The entry point for the `circt-lec` tool:
-/// configures and parses the command-line options,
-/// registers all dialects within a MLIR context,
-/// and calls the `executeLEC` function to do the actual work.
 int main(int argc, char **argv) {
   llvm::InitLLVM y(argc, argv);
 
   // Register any pass manager command line options.
   registerMLIRContextCLOptions();
-  registerPassManagerCLOptions();
-  registerDefaultTimingManagerCLOptions();
   registerAsmPrinterCLOptions();
 
-  // Register the supported dynamatic dialects and create a context to work with.
+  // Register the supported dynamatic dialects and create a context
   DialectRegistry registry;
   dynamatic::registerAllDialects(registry);
   MLIRContext context(registry);
 
-  // Setup of diagnostic handling.
-  llvm::SourceMgr sourceMgr;
-  SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &context);
-  // Avoid printing a superfluous note on diagnostic emission.
-  context.printOpOnDiagnostic(false);
-
-  // Perform the logical equivalence checking; using `exit` to avoid the slow
-  // teardown of the MLIR context.
-  exit(failed(executeLEC(context)));
+  exit(failed(createElasticMiter(context)));
 }

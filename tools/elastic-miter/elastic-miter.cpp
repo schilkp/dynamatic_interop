@@ -12,6 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/IR/Dialect.h"
 #include "mlir/IR/OwningOpRef.h"
 #include "mlir/Parser/Parser.h"
 #include "mlir/Support/LogicalResult.h"
@@ -64,24 +65,8 @@ static LogicalResult prefixOperation(Operation &op, const std::string &prefix) {
   return success();
 }
 
-// create the elatic miter module, given two circuits
-static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context) {
-
-  // TODO use arguments
-  llvm::StringRef filename("../tools/elastic-miter/rewrites/a_lhs.mlir");
-  llvm::StringRef filename2("../tools/elastic-miter/rewrites/a_rhs.mlir");
-  OwningOpRef<ModuleOp> lhsModule = parseSourceFile<ModuleOp>(filename, &context);
-  OwningOpRef<ModuleOp> rhsModule = parseSourceFile<ModuleOp>(filename2, &context);
-
-  // The module can only have one function so we just take the first element
-  // TODO add a check for this
-  FuncOp lhsFuncOp = *lhsModule->getOps<FuncOp>().begin();
-  FuncOp rhsFuncOp = *rhsModule->getOps<FuncOp>().begin();
-
-  OpBuilder builder(&context);
-
-  OwningOpRef<ModuleOp> miterModule = ModuleOp::create(builder.getUnknownLoc());
-
+// TODO clean this up, documentation, do not pass newBlock
+static FuncOp buildNewFunc(OpBuilder builder, Block *newBlock, FuncOp &lhsFuncOp, FuncOp &rhsFuncOp) {
   // Copy the Result Names from lhs but prefix it with EQ_
   SmallVector<Attribute> prefixedResAttr;
   for (Attribute attr : lhsFuncOp.getResNames()) {
@@ -110,23 +95,46 @@ static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context)
 
   // Create a block and put it in the funcOp, this is borrowed from
   // func::funcOp.addEntryBlock()
-  Block *entry = new Block();
-  newFuncOp.push_back(entry);
+  newFuncOp.push_back(newBlock);
 
-  builder.setInsertionPointToStart(entry);
+  builder.setInsertionPointToStart(newBlock);
 
   // FIXME: Allow for passing in locations for these arguments instead of using
   // the operations location.
   ArrayRef<Type> inputTypes = newFuncOp.getArgumentTypes();
   SmallVector<Location> locations(inputTypes.size(), newFuncOp.getOperation()->getLoc());
-  entry->addArguments(inputTypes, locations);
+  newBlock->addArguments(inputTypes, locations);
+
+  return newFuncOp;
+}
+
+// create the elatic miter module, given two circuits
+static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context) {
+
+  // TODO use arguments
+  llvm::StringRef filename("../tools/elastic-miter/rewrites/a_lhs.mlir");
+  llvm::StringRef filename2("../tools/elastic-miter/rewrites/a_rhs.mlir");
+  OwningOpRef<ModuleOp> lhsModule = parseSourceFile<ModuleOp>(filename, &context);
+  OwningOpRef<ModuleOp> rhsModule = parseSourceFile<ModuleOp>(filename2, &context);
+
+  // The module can only have one function so we just take the first element
+  // TODO add a check for this
+  FuncOp lhsFuncOp = *lhsModule->getOps<FuncOp>().begin();
+  FuncOp rhsFuncOp = *rhsModule->getOps<FuncOp>().begin();
+
+  OpBuilder builder(&context);
+
+  OwningOpRef<ModuleOp> miterModule = ModuleOp::create(builder.getUnknownLoc());
+
+  // Create a new function
+  Block *newBlock = new Block();
+  FuncOp newFuncOp = buildNewFunc(builder, newBlock, lhsFuncOp, rhsFuncOp);
 
   // Add the function to the module
   miterModule->push_back(newFuncOp);
 
   /* TODO:
-  3: Add auxillary operations
-  4: Connect those operations up
+  3: Add ND wire operations
   */
 
   // Rename the operations in the existing lhs module TODO check for success
@@ -138,7 +146,7 @@ static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context)
     prefixOperation(op, "rhs_");
   }
 
-  builder.setInsertionPointToStart(entry);
+  builder.setInsertionPointToStart(newBlock);
 
   // TODO improve locations
   ForkOp forkOp;

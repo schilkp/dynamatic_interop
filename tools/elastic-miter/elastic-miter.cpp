@@ -195,8 +195,8 @@ static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context)
 
     NDWireOp lhsNDWireOp = builder.create<NDWireOp>(forkOp.getLoc(), lhsResult);
     NDWireOp rhsNDWireOp = builder.create<NDWireOp>(forkOp.getLoc(), rhsResult);
-    BufferOp lhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), lhsNDWireOp.getResult());
-    BufferOp rhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), rhsNDWireOp.getResult());
+    BufferOp lhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), lhsNDWireOp.getResult(), TimingInfo::oehb(), 3);
+    BufferOp rhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), rhsNDWireOp.getResult(), TimingInfo::oehb(), 3);
     CmpIOp compOp = builder.create<CmpIOp>(builder.getUnknownLoc(), CmpIPredicate::eq, lhsEndBufferOp.getResult(),
                                            rhsEndBufferOp.getResult());
     eqResults.push_back(compOp.getResult());

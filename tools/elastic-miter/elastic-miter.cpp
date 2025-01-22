@@ -16,14 +16,16 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Support/LogicalResult.h"
 #include "llvm/Support/CommandLine.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/InitLLVM.h"
 
+#include "dynamatic/Dialect/Handshake/HandshakeAttributes.h"
 #include "dynamatic/Dialect/Handshake/HandshakeOps.h"
 #include "dynamatic/InitAllDialects.h"
 
 namespace cl = llvm::cl;
 using namespace mlir;
-using namespace dynamatic;
+using namespace dynamatic::handshake;
 
 // TODO remove this
 OpPrintingFlags printingFlags;
@@ -32,20 +34,17 @@ OpPrintingFlags printingFlags;
 static cl::OptionCategory mainCategory("elastic-miter Options");
 
 // TODO make not ugly
-static SmallVector<NamedAttribute>
-createHandshakeAttr(OpBuilder &builder, int bb, const std::string &name) {
+static SmallVector<NamedAttribute> createHandshakeAttr(OpBuilder &builder, int bb, const std::string &name) {
   MLIRContext *context = builder.getContext();
   auto i32 = IntegerType::get(context, 32);
   auto intAttr = IntegerAttr::get(i32, bb);
-  auto nameAttr =
-      builder.getNamedAttr("handshake.name", builder.getStringAttr(name));
+  auto nameAttr = builder.getNamedAttr("handshake.name", builder.getStringAttr(name));
   auto bbAttr = builder.getNamedAttr("handshake.bb", intAttr);
   SmallVector<NamedAttribute> attrs = {nameAttr, bbAttr};
   return attrs;
 }
 
-static LogicalResult changeHandshakeBB(MLIRContext &context, Operation *op,
-                                       int bb) {
+static LogicalResult changeHandshakeBB(MLIRContext &context, Operation *op, int bb) {
   auto i32 = IntegerType::get(&context, 32);
   auto attr = IntegerAttr::get(i32, bb);
   op->setAttr("handshake.bb", attr);
@@ -66,21 +65,18 @@ static LogicalResult prefixOperation(Operation &op, const std::string &prefix) {
 }
 
 // create the elatic miter module, given two circuits
-static FailureOr<OwningOpRef<ModuleOp>>
-createElasticMiter(MLIRContext &context) {
+static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context) {
 
   // TODO use arguments
   llvm::StringRef filename("../tools/elastic-miter/rewrites/a_lhs.mlir");
   llvm::StringRef filename2("../tools/elastic-miter/rewrites/a_rhs.mlir");
-  OwningOpRef<ModuleOp> lhsModule =
-      parseSourceFile<ModuleOp>(filename, &context);
-  OwningOpRef<ModuleOp> rhsModule =
-      parseSourceFile<ModuleOp>(filename2, &context);
+  OwningOpRef<ModuleOp> lhsModule = parseSourceFile<ModuleOp>(filename, &context);
+  OwningOpRef<ModuleOp> rhsModule = parseSourceFile<ModuleOp>(filename2, &context);
 
   // The module can only have one function so we just take the first element
   // TODO add a check for this
-  handshake::FuncOp lhsFuncOp = *lhsModule->getOps<handshake::FuncOp>().begin();
-  handshake::FuncOp rhsFuncOp = *rhsModule->getOps<handshake::FuncOp>().begin();
+  FuncOp lhsFuncOp = *lhsModule->getOps<FuncOp>().begin();
+  FuncOp rhsFuncOp = *rhsModule->getOps<FuncOp>().begin();
 
   OpBuilder builder(&context);
 
@@ -91,37 +87,26 @@ createElasticMiter(MLIRContext &context) {
   for (Attribute attr : lhsFuncOp.getResNames()) {
     auto strAttr = attr.dyn_cast<StringAttr>();
     if (strAttr) {
-      prefixedResAttr.push_back(
-          builder.getStringAttr("EQ_" + strAttr.getValue().str()));
+      prefixedResAttr.push_back(builder.getStringAttr("EQ_" + strAttr.getValue().str()));
     }
   }
 
   // TODO check equality of interfaces
 
   auto argNamedAttr = builder.getNamedAttr("argNames", lhsFuncOp.getArgNames());
-  auto resNamedAttr =
-      builder.getNamedAttr("resNames", builder.getArrayAttr(prefixedResAttr));
+  auto resNamedAttr = builder.getNamedAttr("resNames", builder.getArrayAttr(prefixedResAttr));
 
   ArrayRef<NamedAttribute> funcAttr({argNamedAttr, resNamedAttr});
 
   int outputSize = lhsFuncOp.getResultTypes().size();
 
-  handshake::ChannelType i1ChannelType =
-      handshake::ChannelType::get(builder.getI1Type());
-  llvm::SmallVector<Type> outputTypes(
-      outputSize, i1ChannelType); // replace all outputs with i1 channels which
-                                  // represent the result of the comparison
-  FunctionType funcType =
-      builder.getFunctionType(lhsFuncOp.getArgumentTypes(), outputTypes);
+  ChannelType i1ChannelType = ChannelType::get(builder.getI1Type());
+  llvm::SmallVector<Type> outputTypes(outputSize, i1ChannelType); // replace all outputs with i1 channels which
+                                                                  // represent the result of the comparison
+  FunctionType funcType = builder.getFunctionType(lhsFuncOp.getArgumentTypes(), outputTypes);
 
   // Create the miter function
-  handshake::FuncOp newFuncOp = builder.create<handshake::FuncOp>(
-      builder.getUnknownLoc(), "elastic_miter", funcType, funcAttr);
-
-  for (const NamedAttribute &namedAttr : newFuncOp->getAttrDictionary()) {
-    llvm::outs() << "Attribute name: " << namedAttr.getName()
-                 << ", Attribute value: " << namedAttr.getValue() << "\n";
-  }
+  FuncOp newFuncOp = builder.create<FuncOp>(builder.getUnknownLoc(), "elastic_miter", funcType, funcAttr);
 
   // Create a block and put it in the funcOp, this is borrowed from
   // func::funcOp.addEntryBlock()
@@ -133,8 +118,7 @@ createElasticMiter(MLIRContext &context) {
   // FIXME: Allow for passing in locations for these arguments instead of using
   // the operations location.
   ArrayRef<Type> inputTypes = newFuncOp.getArgumentTypes();
-  SmallVector<Location> locations(inputTypes.size(),
-                                  newFuncOp.getOperation()->getLoc());
+  SmallVector<Location> locations(inputTypes.size(), newFuncOp.getOperation()->getLoc());
   entry->addArguments(inputTypes, locations);
 
   // Add the function to the module
@@ -156,34 +140,40 @@ createElasticMiter(MLIRContext &context) {
 
   builder.setInsertionPointToStart(entry);
 
-  handshake::ForkOp forkOp;
+  // TODO improve locations
+  ForkOp forkOp;
+  BufferOp lhsBufferOp;
+  BufferOp rhsBufferOp;
   for (unsigned i = 0; i < lhsFuncOp.getNumArguments(); ++i) {
     BlockArgument lhsArgs = lhsFuncOp.getArgument(i);
     BlockArgument rhsArgs = rhsFuncOp.getArgument(i);
     BlockArgument miterArgs = newFuncOp.getArgument(i);
 
     TypeRange tyRange(miterArgs.getType());
-    SmallVector<NamedAttribute> attrs = createHandshakeAttr(
-        builder, 0, "fork_" + lhsFuncOp.getArgName(i).str());
-    forkOp = builder.create<handshake::ForkOp>(newFuncOp.getLoc(), tyRange,
-                                               miterArgs, attrs);
+    SmallVector<NamedAttribute> forkAttrs = createHandshakeAttr(builder, 0, "fork_" + lhsFuncOp.getArgName(i).str());
+    SmallVector<NamedAttribute> bufAttrs = createHandshakeAttr(builder, 0, "buffer_" + lhsFuncOp.getArgName(i).str());
+
+    // forkOp = builder.create<ForkOp>(newFuncOp.getLoc(), tyRange, miterArgs, forkAttrs);
+    forkOp = builder.create<ForkOp>(newFuncOp.getLoc(), miterArgs, 2);
+    lhsBufferOp = builder.create<BufferOp>(forkOp.getLoc(), forkOp.getResults()[0], TimingInfo::oehb(), 3);
+    rhsBufferOp = builder.create<BufferOp>(forkOp.getLoc(), forkOp.getResults()[1], TimingInfo::oehb(), 3);
+    // ndWireOp = ... TODO
 
     // Use the newly created fork's output instead of the origial argument in
-    // the lhs_funcOp's operations
+    // the lhsFuncOp's operations
     for (Operation *op : llvm::make_early_inc_range(lhsArgs.getUsers())) {
-      op->replaceUsesOfWith(lhsArgs, forkOp.getResults()[0]);
+      op->replaceUsesOfWith(lhsArgs, lhsBufferOp.getResult());
     }
     // Use the newly created fork's output instead of the origial argument in
-    // the rhs_funcOp's operations
+    // the rhsFuncOp's operations
     for (Operation *op : llvm::make_early_inc_range(rhsArgs.getUsers())) {
-      op->replaceUsesOfWith(rhsArgs, forkOp.getResults()[0]);
+      op->replaceUsesOfWith(rhsArgs, rhsBufferOp.getResult());
     }
   }
 
-  // Get lhs and rhs EndOp, a handshake.func can only have a single EndOp, TODO
-  // check
-  handshake::EndOp lhsEndOp = *lhsFuncOp.getOps<handshake::EndOp>().begin();
-  handshake::EndOp rhsEndOp = *rhsFuncOp.getOps<handshake::EndOp>().begin();
+  // Get lhs and rhs EndOp, a handshake.func can only have a single EndOp, TODO check
+  EndOp lhsEndOp = *lhsFuncOp.getOps<EndOp>().begin();
+  EndOp rhsEndOp = *rhsFuncOp.getOps<EndOp>().begin();
 
   // Create comparison logic
   llvm::SmallVector<Value> eqResults;
@@ -191,14 +181,14 @@ createElasticMiter(MLIRContext &context) {
     Value lhsResult = lhsEndOp.getOperand(i);
     Value rhsResult = rhsEndOp.getOperand(i);
 
-    handshake::CmpIOp compOp = builder.create<handshake::CmpIOp>(
-        builder.getUnknownLoc(), handshake::CmpIPredicate::eq, lhsResult,
-        rhsResult);
+    BufferOp lhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), lhsResult, TimingInfo::oehb(), 3);
+    BufferOp rhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), rhsResult, TimingInfo::oehb(), 3);
+    CmpIOp compOp =
+        builder.create<CmpIOp>(builder.getUnknownLoc(), CmpIPredicate::eq, lhsEndBufferOp.getResult(), rhsEndBufferOp.getResult());
     eqResults.push_back(compOp.getResult());
   }
 
-  handshake::EndOp newEndOp =
-      builder.create<handshake::EndOp>(builder.getUnknownLoc(), eqResults);
+  EndOp newEndOp = builder.create<EndOp>(builder.getUnknownLoc(), eqResults);
   // TODO put in correct bb
   // newEndOp->setAttr(bb3);
 
@@ -221,6 +211,9 @@ createElasticMiter(MLIRContext &context) {
     previousOp = &op;
   }
 
+  std::error_code EC;
+  llvm::raw_fd_ostream fileStream("../tools/elastic-miter/out/comp/handshake_export.mlir", EC, llvm::sys::fs::OF_None);
+  miterModule->print(fileStream, printingFlags);
   miterModule->print(llvm::outs(), printingFlags);
 
   if (!miterModule) {

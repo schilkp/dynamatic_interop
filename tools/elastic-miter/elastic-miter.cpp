@@ -152,6 +152,8 @@ static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context)
   ForkOp forkOp;
   BufferOp lhsBufferOp;
   BufferOp rhsBufferOp;
+  NDWireOp lhsNDWireOp;
+  NDWireOp rhsNDWireOp;
   for (unsigned i = 0; i < lhsFuncOp.getNumArguments(); ++i) {
     BlockArgument lhsArgs = lhsFuncOp.getArgument(i);
     BlockArgument rhsArgs = rhsFuncOp.getArgument(i);
@@ -165,21 +167,23 @@ static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context)
     forkOp = builder.create<ForkOp>(newFuncOp.getLoc(), miterArgs, 2);
     lhsBufferOp = builder.create<BufferOp>(forkOp.getLoc(), forkOp.getResults()[0], TimingInfo::oehb(), 3);
     rhsBufferOp = builder.create<BufferOp>(forkOp.getLoc(), forkOp.getResults()[1], TimingInfo::oehb(), 3);
-    // ndWireOp = ... TODO
+    lhsNDWireOp = builder.create<NDWireOp>(forkOp.getLoc(), lhsBufferOp.getResult());
+    rhsNDWireOp = builder.create<NDWireOp>(forkOp.getLoc(), rhsBufferOp.getResult());
 
     // Use the newly created fork's output instead of the origial argument in
     // the lhsFuncOp's operations
     for (Operation *op : llvm::make_early_inc_range(lhsArgs.getUsers())) {
-      op->replaceUsesOfWith(lhsArgs, lhsBufferOp.getResult());
+      op->replaceUsesOfWith(lhsArgs, lhsNDWireOp.getResult());
     }
     // Use the newly created fork's output instead of the origial argument in
     // the rhsFuncOp's operations
     for (Operation *op : llvm::make_early_inc_range(rhsArgs.getUsers())) {
-      op->replaceUsesOfWith(rhsArgs, rhsBufferOp.getResult());
+      op->replaceUsesOfWith(rhsArgs, rhsNDWireOp.getResult());
     }
   }
 
-  // Get lhs and rhs EndOp, a handshake.func can only have a single EndOp, TODO check
+  // Get lhs and rhs EndOp, a handshake.func can only have a single EndOp, TODO
+  // check
   EndOp lhsEndOp = *lhsFuncOp.getOps<EndOp>().begin();
   EndOp rhsEndOp = *rhsFuncOp.getOps<EndOp>().begin();
 
@@ -189,10 +193,12 @@ static FailureOr<OwningOpRef<ModuleOp>> createElasticMiter(MLIRContext &context)
     Value lhsResult = lhsEndOp.getOperand(i);
     Value rhsResult = rhsEndOp.getOperand(i);
 
-    BufferOp lhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), lhsResult, TimingInfo::oehb(), 3);
-    BufferOp rhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), rhsResult, TimingInfo::oehb(), 3);
-    CmpIOp compOp =
-        builder.create<CmpIOp>(builder.getUnknownLoc(), CmpIPredicate::eq, lhsEndBufferOp.getResult(), rhsEndBufferOp.getResult());
+    NDWireOp lhsNDWireOp = builder.create<NDWireOp>(forkOp.getLoc(), lhsResult);
+    NDWireOp rhsNDWireOp = builder.create<NDWireOp>(forkOp.getLoc(), rhsResult);
+    BufferOp lhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), lhsNDWireOp.getResult());
+    BufferOp rhsEndBufferOp = builder.create<BufferOp>(forkOp.getLoc(), rhsNDWireOp.getResult());
+    CmpIOp compOp = builder.create<CmpIOp>(builder.getUnknownLoc(), CmpIPredicate::eq, lhsEndBufferOp.getResult(),
+                                           rhsEndBufferOp.getResult());
     eqResults.push_back(compOp.getResult());
   }
 

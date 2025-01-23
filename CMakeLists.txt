@@ -72,6 +72,7 @@ option(LLVM_BUILD_TOOLS "Build the LLVM tools. If OFF, just generate build targe
 # Define some variables for Dynamatic
 set(DYNAMATIC_SOURCE_DIR ${CMAKE_SOURCE_DIR})
 set(DYNAMATIC_INCLUDE_DIR ${DYNAMATIC_SOURCE_DIR}/include)
+set(XLS_INTEGRATION_DIR ${DYNAMATIC_SOURCE_DIR}/xls_integration)
 set(DYNAMATIC_BINARY_DIR ${CMAKE_BINARY_DIR})
 set(DYNAMATIC_TOOLS_DIR ${DYNAMATIC_BINARY_DIR}/bin)
 set(DYNAMATIC_EXPERIMENTAL_DIR ${DYNAMATIC_SOURCE_DIR}/experimental)
@@ -131,10 +132,17 @@ else()
 endif()
 
 #-------------------------------------------------------------------------------
+# Hackjob
+#-------------------------------------------------------------------------------
+
+add_compile_definitions(DYNAMATIC_INTEGRATION)
+
+#-------------------------------------------------------------------------------
 # Directory setup
 #-------------------------------------------------------------------------------
 
 add_subdirectory(${DYNAMATIC_INCLUDE_DIR}/dynamatic)
+add_subdirectory(${XLS_INTEGRATION_DIR}/xls/contrib/mlir/IR)
 add_subdirectory(${DYNAMATIC_SOURCE_DIR}/experimental)
 add_subdirectory(${DYNAMATIC_SOURCE_DIR}/lib)
 add_subdirectory(${DYNAMATIC_SOURCE_DIR}/test)

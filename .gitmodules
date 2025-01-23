@@ -2,10 +2,15 @@
 	path = polygeist
 	url = https://github.com/EPFL-LAP/Polygeist.git
 	branch = main
-  shallow = true
+    shallow = true
 
 [submodule "visual-dataflow/godot-cpp"]
 	path = visual-dataflow/godot-cpp
 	url = https://github.com/godotengine/godot-cpp
 	branch = 4.1
-  shallow = true
+    shallow = true
+
+[submodule "xls"]
+	path = xls
+	url = https://github.com/schilkp/xls.git
+	branch = interop

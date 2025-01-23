@@ -1729,7 +1729,8 @@ public:
     RewritePatternSet patterns(ctx);
     patterns.insert<ConvertFunc, ConvertMemInterface>(typeConverter, ctx,
                                                       lowerState);
-    patterns.insert<ConvertInstance, ConvertToHWInstance<handshake::BufferOp>,
+    patterns.insert<ConvertInstance, 
+                    ConvertToHWInstance<handshake::BufferOp>,
                     ConvertToHWInstance<handshake::ConditionalBranchOp>,
                     ConvertToHWInstance<handshake::BranchOp>,
                     ConvertToHWInstance<handshake::MergeOp>,

@@ -22,6 +22,7 @@ target_link_libraries(dynamatic-opt
   DynamaticCfToHandshake
   DynamaticHandshake
   DynamaticHandshakeToHW
+  DynamaticHandshakeToXls
   DynamaticTestTransforms
   DynamaticTransforms
   DynamaticTutorialsCreatingPasses
@@ -29,6 +30,7 @@ target_link_libraries(dynamatic-opt
   DynamaticExperimentalSupport
   DynamaticExperimentalTransforms
 
+  XlsMlir
   MLIRIR
   MLIRAffineTransforms
   MLIRArithTransforms

@@ -80,4 +80,17 @@ def HandshakeToHW : DynamaticPass<"lower-handshake-to-hw",
   let constructor = "dynamatic::createHandshakeToHWPass()";
 }
 
+//===----------------------------------------------------------------------===//
+// HandshakeToXls
+//===----------------------------------------------------------------------===//
+
+def HandshakeToXls : DynamaticPass<"lower-handshake-to-xls",
+                                  ["mlir::xls::XlsDialect"]> {
+  let summary = "Lowers Handshake to XLS.";
+  let description = [{
+    Lowers Handshake IR into a network of XLS procs connected by channels.
+  }];
+  let constructor = "dynamatic::createHandshakeToXlsPass()";
+}
+
 #endif // DYNAMATIC_CONVERSION_PASSES_TD

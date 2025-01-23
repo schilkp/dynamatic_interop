@@ -24,15 +24,17 @@
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
+#include "xls/contrib/mlir/IR/xls_ops.h"
 
 namespace dynamatic {
 
 inline void registerAllDialects(mlir::DialectRegistry &registry) {
-  registry.insert<mlir::LLVM::LLVMDialect, mlir::affine::AffineDialect,
-                  mlir::math::MathDialect, mlir::memref::MemRefDialect,
-                  mlir::func::FuncDialect, mlir::arith::ArithDialect,
-                  mlir::cf::ControlFlowDialect, mlir::scf::SCFDialect,
-                  handshake::HandshakeDialect, hw::HWDialect>();
+  registry
+      .insert<mlir::LLVM::LLVMDialect, mlir::affine::AffineDialect,
+              mlir::math::MathDialect, mlir::memref::MemRefDialect,
+              mlir::func::FuncDialect, mlir::arith::ArithDialect,
+              mlir::cf::ControlFlowDialect, mlir::scf::SCFDialect,
+              handshake::HandshakeDialect, hw::HWDialect, mlir::xls::XlsDialect>();
 }
 
 } // namespace dynamatic
